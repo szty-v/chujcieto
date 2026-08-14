@@ -45,6 +45,7 @@ local Dependencies = require(FusionPackage:WaitForChild("Dependencies"))
 local Fusion = require(FusionPackage:WaitForChild("Fusion"))
 local NativeState = require(FusionPackage:WaitForChild("State"))
 local NativeSlotComponent = require(FusionPackage.Components.Base.Slot)
+local NativeAssetDataProcessor = require(FusionPackage.Components.Processors.Asset.AssetData)
 local NodesModule = require(ReplicatedStorage:WaitForChild("Nodes"))
 local OnEvent = Fusion.OnEvent
 local PlayerDataState = Dependencies.PlayerData
@@ -2134,13 +2135,37 @@ local function MountMockNativeSlot(unitID, slot)
     local host, mountedInNativeSlot = CreateMockSlotHost(anchor, slot)
 
     local scope = Fusion.scoped(Fusion, NativeState, {
-        Slot = NativeSlotComponent
+        Slot = NativeSlotComponent,
+        AssetDataProcessor = NativeAssetDataProcessor
     })
 
-    -- Give AssetDataProcessor an explicit reactive mock record. This follows
-    -- the exact native path while avoiding reads from the server-owned hotbar.
+    -- Build the exact same AssetStates object that the real Hotbar builds.
+    -- Passing raw ID/Asset/Data into Base.Slot caused Base.Slot to invoke its
+    -- processor from inside a later Computed evaluation; after a teleport that
+    -- can hit Roblox's "cannot require a non-RobloxScript module" restriction.
+    -- Prebuilding AssetStates here keeps require() out of that reactive callback.
     local dataState = scope:Value(CloneMap(unitData))
     local assetState = scope:Value(unitData.Asset)
+    local idState = scope:Value(unitID)
+    local assetStates = scope:AssetDataProcessor({
+        ID = idState,
+        Asset = assetState,
+        Data = dataState,
+        AssetType = "Unit"
+    })
+
+    -- Real Hotbar passes PlacementCost separately as Cost. For our mock slot,
+    -- derive it from the current real slot/template when available; otherwise
+    -- leave it nil and UnitStatsProcessor can calculate from the unit data.
+    local costState = scope:Value(nil)
+    do
+        local realHotbar = GetRealHotbarSnapshot()
+        local slots = type(realHotbar.Slots) == "table" and realHotbar.Slots or {}
+        local realSlot = slots[tostring(slot)] or slots[slot]
+        if type(realSlot) == "table" and tonumber(realSlot.PlacementCost) then
+            costState:set(tonumber(realSlot.PlacementCost))
+        end
+    end
 
     local instance = scope:Slot({
         Parent = host,
@@ -2150,9 +2175,8 @@ local function MountMockNativeSlot(unitID, slot)
 
         DisplayType = "Hotbar",
         AssetType = "Unit",
-        ID = unitID,
-        Asset = assetState,
-        Data = dataState,
+        AssetStates = assetStates,
+        Cost = costState,
         SlotNumber = slot,
 
         -- Match the real Hotbar slot presentation as closely as possible.
@@ -2219,6 +2243,9 @@ local function MountMockNativeSlot(unitID, slot)
         Slot = slot,
         DataState = dataState,
         AssetState = assetState,
+        IDState = idState,
+        AssetStates = assetStates,
+        CostState = costState,
         NativeMounted = mountedInNativeSlot
     }
 
@@ -2437,7 +2464,14 @@ local function RestorePersistentMockData()
     local equipped = PersistedSnapshot.Equipped
     if type(equipped) == "table" then
         task.defer(function()
-            task.wait(1)
+            -- Rejoin auto-exec can run before BottomHUD and all Fusion modules
+            -- have finished their first client initialization. Wait for the
+            -- native hotbar to exist before restoring mock native slots.
+            local deadline = os.clock() + 12
+            repeat
+                task.wait(0.25)
+            until FindNativeHotbarSlotAnchor(1) or os.clock() >= deadline
+
             for unitID, slot in pairs(equipped) do
                 if MockUnitIDs[unitID] then
                     pcall(VisualEquipMockUnit, unitID, tonumber(slot))
