@@ -24,10 +24,10 @@ local function WaitForTeleportBootStability()
         end)
     end
 
-    -- The game is normally ready within ~2 seconds after teleport.
-    -- Use one predictable 3-second grace period instead of waiting for
-    -- BottomHUD descendant counts to stabilize for 8-10+ seconds.
-    task.wait(3)
+    -- Fast teleport boot: give the game one second after game.Loaded.
+    -- Native BLACKSIGIL hotbar modules are loaded lazily below so this short
+    -- delay does not poison game UI modules that have not mounted yet.
+    task.wait(1)
 end
 
 WaitForTeleportBootStability()
@@ -70,7 +70,8 @@ local FusionPackage = ReplicatedStorage:WaitForChild("FusionPackage")
 local Dependencies = require(FusionPackage:WaitForChild("Dependencies"))
 local Fusion = require(FusionPackage:WaitForChild("Fusion"))
 local NativeState = require(FusionPackage:WaitForChild("State"))
-local NativeSlotComponent = require(FusionPackage.Components.Base.Slot)
+local NativeSlotComponent = nil
+local NativeSlotLoadAttempted = false
 local NodesModule = require(ReplicatedStorage:WaitForChild("Nodes"))
 local OnEvent = Fusion.OnEvent
 local PlayerDataState = Dependencies.PlayerData
@@ -78,6 +79,80 @@ local UnitDataState = Dependencies.UnitData
 local ItemDataState = Dependencies.ItemData
 local HotbarState = Dependencies.HotbarState
 local BannerDataState = Dependencies.BannerData
+
+local function IsModuleAlreadyLoaded(moduleScript)
+    if not moduleScript or not moduleScript:IsA("ModuleScript") then
+        return false
+    end
+
+    -- Most executors expose getloadedmodules(). On teleport boot this lets us
+    -- distinguish modules Roblox has already loaded from modules BLACKSIGIL
+    -- would be first to load.
+    if type(getloadedmodules) == "function" then
+        local ok, modules = pcall(getloadedmodules)
+        if ok and type(modules) == "table" then
+            for _, loaded in ipairs(modules) do
+                if loaded == moduleScript then
+                    return true
+                end
+            end
+        end
+    end
+
+    return false
+end
+
+local function NativeHotbarDependenciesArePrimed()
+    if not __BLACKSIGIL_TELEPORT_BOOT then
+        return true
+    end
+
+    local actions = FusionPackage:FindFirstChild("Actions")
+    local stateFolder = FusionPackage:FindFirstChild("State")
+    local components = FusionPackage:FindFirstChild("Components")
+    local base = components and components:FindFirstChild("Base")
+
+    local slotModule = base and base:FindFirstChild("Slot")
+    local buttonModule = base and base:FindFirstChild("Button")
+    local playSoundModule = stateFolder and stateFolder:FindFirstChild("PlaySound")
+    local getSettingModule = actions and actions:FindFirstChild("GetSettingValue")
+
+    if type(getloadedmodules) == "function" then
+        return IsModuleAlreadyLoaded(slotModule)
+            and IsModuleAlreadyLoaded(buttonModule)
+            and IsModuleAlreadyLoaded(playSoundModule)
+            and IsModuleAlreadyLoaded(getSettingModule)
+    end
+
+    -- Conservative fallback for executors without getloadedmodules:
+    -- wait until the game itself has mounted at least one full menu. At that
+    -- point Base.Menu/Base.Button/PlaySound have been required natively.
+    return PlayerGui:FindFirstChild("UnitInventory") ~= nil
+        or PlayerGui:FindFirstChild("ItemInventory") ~= nil
+        or PlayerGui:FindFirstChild("TraitReroll") ~= nil
+        or PlayerGui:FindFirstChild("Summon") ~= nil
+end
+
+local function GetNativeSlotComponent()
+    if NativeSlotComponent then
+        return NativeSlotComponent
+    end
+
+    if not NativeHotbarDependenciesArePrimed() then
+        return nil, "native hotbar UI modules are not primed yet"
+    end
+
+    local module = FusionPackage.Components.Base.Slot
+    local ok, result = pcall(require, module)
+    if not ok or type(result) ~= "function" then
+        return nil, tostring(result)
+    end
+
+    NativeSlotComponent = result
+    NativeSlotLoadAttempted = true
+    SafeLog("Native Hotbar", "native Slot modules primed; v15 renderer enabled")
+    return NativeSlotComponent
+end
 
 local SharedFolder = ReplicatedStorage:WaitForChild("Shared")
 local SharedUtils = require(SharedFolder:WaitForChild("Utils"))
@@ -2386,6 +2461,11 @@ local function MountMockNativeSlot(unitID, slot)
         return true
     end
 
+    local slotComponent, slotComponentErr = GetNativeSlotComponent()
+    if not slotComponent then
+        return false, slotComponentErr or "native hotbar renderer deferred"
+    end
+
     -- Do not tear down/recreate the same visual repeatedly. During rejoin and
     -- TraitReroll rebuilds several callers can request the same mount.
     local existingView = MockSlotViews[unitID]
@@ -2423,7 +2503,7 @@ local function MountMockNativeSlot(unitID, slot)
     local host, mountedInNativeSlot = CreateMockSlotHost(anchor, slot)
 
     local scope = Fusion.scoped(Fusion, NativeState, {
-        Slot = NativeSlotComponent
+        Slot = slotComponent
     })
 
     -- Give AssetDataProcessor an explicit reactive mock record. This follows
@@ -2514,6 +2594,49 @@ local function MountMockNativeSlot(unitID, slot)
 
     MockSlotMounting[unitID] = nil
     return true
+end
+
+local DeferredHotbarMounts = {}
+
+local function QueueDeferredNativeHotbarMount(unitID, slot)
+    if DeferredHotbarMounts[unitID] then
+        return
+    end
+
+    DeferredHotbarMounts[unitID] = true
+
+    task.spawn(function()
+        local deadline = os.clock() + 45
+
+        while os.clock() < deadline do
+            if MockEquippedSlots[unitID] ~= slot then
+                DeferredHotbarMounts[unitID] = nil
+                return
+            end
+
+            if NativeHotbarDependenciesArePrimed() then
+                local ok, mounted, mountErr = pcall(MountMockNativeSlot, unitID, slot)
+
+                if ok and mounted == true then
+                    DeferredHotbarMounts[unitID] = nil
+                    SafeLog(
+                        "Native Hotbar",
+                        string.format("%s -> slot %d restored after native UI primed", unitID, slot)
+                    )
+                    return
+                elseif not ok then
+                    warn("[BLACKSIGIL] Deferred hotbar mount failed:", mounted)
+                elseif mountErr and mountErr ~= "native hotbar UI modules are not primed yet" then
+                    warn("[BLACKSIGIL] Deferred hotbar mount warning:", mountErr)
+                end
+            end
+
+            task.wait(0.25)
+        end
+
+        DeferredHotbarMounts[unitID] = nil
+        warn("[BLACKSIGIL] Native hotbar renderer stayed unprimed; equip state/follower kept:", unitID)
+    end)
 end
 
 local function GetFollowerExtraData(unitID, slot)
@@ -2631,9 +2754,15 @@ local function VisualEquipMockUnit(unitID, requestedSlot)
     MockEquippedSlots[unitID] = slot
     MockSlotUnits[slot] = unitID
 
-    local okSlot, slotErr = pcall(MountMockNativeSlot, unitID, slot)
+    local okSlot, mountedSlot, slotErr = pcall(MountMockNativeSlot, unitID, slot)
     if not okSlot then
-        warn("[BLACKSIGIL] Native mock slot mount failed:", slotErr)
+        warn("[BLACKSIGIL] Native mock slot mount failed:", mountedSlot)
+        QueueDeferredNativeHotbarMount(unitID, slot)
+    elseif mountedSlot ~= true then
+        -- Rejoin boot commonly lands here for a moment. Keep equip/follower
+        -- state immediately and mount the v15 card once Roblox has primed the
+        -- shared native UI modules.
+        QueueDeferredNativeHotbarMount(unitID, slot)
     end
 
     RemoveMockFollower(unitID)
@@ -2656,6 +2785,7 @@ VisualUnequipMockUnit = function(unitID)
 
     RemoveMockFollower(unitID)
     CleanupMockNativeSlot(unitID)
+    DeferredHotbarMounts[unitID] = nil
 
     if slot then
         MockSlotUnits[slot] = nil
@@ -2783,7 +2913,7 @@ local function RestorePersistentMockData()
                     SafeLog(
                         "Rejoin Restore",
                         string.format(
-                            "%s -> restored slot %d",
+                            "%s -> equip state restored slot %d",
                             entry.UnitID,
                             entry.Slot
                         )
@@ -3231,7 +3361,7 @@ QueuePersistentSave()
 SafeLog("Loaded", string.format("Trait engine ready with %d live MockTraits; native banner summon engine ready", #TraitDatabase))
 SafeLog("Equip", "Visual mock equip/unequip enabled")
 SafeLog("Currency", "Native client affordability mirrors enabled")
-SafeLog("Hotbar", "v15 native visuals; 3s rejoin boot + exact equipped-slot restore")
+SafeLog("Hotbar", "v15 native visuals; 1s rejoin boot + lazy safe native-module mount")
 SafeLog("Pity", "Summon pity 50/400/10000; trait pity Draconic 300 / Forsaken 500 / Primordial 750 / Unbound 1500")
 SafeLog("State", "Using leaf ItemData Values + PlayerData.HotbarData backing state")
 
