@@ -740,26 +740,31 @@ local function ApplyTraitToNativeLocalState(unitID, rolledTrait)
     if type(rolledTrait) ~= "table" then
         return false, "invalid trait"
     end
-    if not PlayerDataState or type(PlayerDataState.set) ~= "function" then
-        return false, "PlayerData state has no :set()"
-    end
 
-    local okPeek, currentRoot = pcall(Fusion.peek, PlayerDataState)
-    if not okPeek or type(currentRoot) ~= "table" then
-        return false, "Fusion.peek(PlayerData) failed"
-    end
-
-    local currentUnits = currentRoot.UnitData
+    -- Mock units live in Dependencies.UnitData. Do NOT replace the whole
+    -- Dependencies.PlayerData root here: on rejoin that wakes unrelated
+    -- PlayerOverhead/Fusion computations and can produce locked-UIScale errors.
+    local currentUnits = GetNativeUnitDataSnapshot()
     if type(currentUnits) ~= "table" then
-        return false, "PlayerData.UnitData missing"
+        return false, "native UnitData unavailable"
     end
 
     local currentUnit = currentUnits[unitID]
+
+    -- Rejoin race fallback: recover this mock record from the persisted snapshot
+    -- if UnitData has not received it yet.
+    if type(currentUnit) ~= "table"
+        and type(PersistedSnapshot) == "table"
+        and type(PersistedSnapshot.MockUnits) == "table"
+        and type(PersistedSnapshot.MockUnits[unitID]) == "table" then
+        currentUnit = CloneMap(PersistedSnapshot.MockUnits[unitID])
+        currentUnit.BLACKSIGILMock = true
+    end
+
     if type(currentUnit) ~= "table" then
         return false, "unit not found: " .. tostring(unitID)
     end
 
-    local newRoot = CloneMap(currentRoot)
     local newUnits = CloneMap(currentUnits)
     local newUnit = CloneMap(currentUnit)
     local newHistory = CloneArray(currentUnit.TraitHistory)
@@ -770,6 +775,7 @@ local function ApplyTraitToNativeLocalState(unitID, rolledTrait)
 
     newUnit.Trait = traitKey
     newUnit.TraitRollAmount = oldRollAmount + 1
+    newUnit.BLACKSIGILMock = true
 
     table.insert(newHistory, 1, { traitKey, os.time() })
     while #newHistory > 50 do
@@ -778,21 +784,28 @@ local function ApplyTraitToNativeLocalState(unitID, rolledTrait)
     newUnit.TraitHistory = newHistory
 
     newUnits[unitID] = newUnit
-        MockUnitIDs[unitID] = true
-    newRoot.UnitData = newUnits
+    MockUnitIDs[unitID] = true
 
-    local okSet, setErr = pcall(function()
-        PlayerDataState:set(newRoot)
-        local unitSyncOk, unitSyncErr = SetNativeUnitDataState(newUnits)
-        if not unitSyncOk then
-            warn("[BLACKSIGIL] UnitData sync warning:", unitSyncErr)
-        end
-    end)
-    if not okSet then
-        return false, "PlayerData:set failed: " .. tostring(setErr)
+    local unitSyncOk, unitSyncErr = SetNativeUnitDataState(newUnits)
+    if not unitSyncOk then
+        return false, "UnitData sync failed: " .. tostring(unitSyncErr)
     end
 
-    SafeLog("Native Trait", string.format("%s: %s -> %s (roll %d)", unitID, tostring(oldTrait), tostring(traitKey), newUnit.TraitRollAmount))
+    -- Keep the in-memory persisted copy current too, so a GUI rebuild/rejoin race
+    -- cannot resurrect the old trait.
+    if type(PersistedSnapshot) == "table" then
+        PersistedSnapshot.MockUnits = type(PersistedSnapshot.MockUnits) == "table"
+            and PersistedSnapshot.MockUnits or {}
+        PersistedSnapshot.MockUnits[unitID] = JsonSafeCopy(newUnit)
+    end
+
+    SafeLog("Native Trait", string.format(
+        "%s: %s -> %s (roll %d)",
+        unitID,
+        tostring(oldTrait),
+        tostring(traitKey),
+        newUnit.TraitRollAmount
+    ))
     return true
 end
 
@@ -1090,17 +1103,20 @@ local function PerformVisualReroll(unitID, confirmed, options)
         VisualState.LastTrait = rolledTrait
         QueuePersistentSave()
 
+        -- Render from MockTraits directly every time. This keeps the name,
+        -- description, chance and icon visible even when the native Trait
+        -- processor is rebuilding after a rejoin.
+        RenderTraitResult(rolledTrait)
+        AddTraitToHistory(rolledTrait)
+
         if appliedNative then
             if RefreshEquippedMockPresentation then
                 task.defer(RefreshEquippedMockPresentation, unitID)
             end
-            SyncAllDisplays()
         else
             warn("[BLACKSIGIL] Native local trait state failed:", nativeErr)
-            RenderTraitResult(rolledTrait)
-            AddTraitToHistory(rolledTrait)
-            SyncAllDisplays()
         end
+        SyncAllDisplays()
 
         SafeLog("VISUAL REROLL", string.format("%s -> %s (%s, %.4f%%)%s", tostring(unitID), tostring(rolledTrait.Name), tostring(rolledTrait.Rarity), (rolledTrait.Chance or 0) * 100, confirmed and " [confirmed]" or ""))
         return true
@@ -1919,8 +1935,15 @@ local function GetCurrentMockUnitData(unitID)
     end
 
     local ok, root = pcall(Fusion.peek, PlayerDataState)
-    if ok and type(root) == "table" and type(root.UnitData) == "table" then
+    if ok and type(root) == "table" and type(root.UnitData) == "table"
+        and type(root.UnitData[unitID]) == "table" then
         return root.UnitData[unitID]
+    end
+
+    if type(PersistedSnapshot) == "table"
+        and type(PersistedSnapshot.MockUnits) == "table"
+        and type(PersistedSnapshot.MockUnits[unitID]) == "table" then
+        return PersistedSnapshot.MockUnits[unitID]
     end
 
     return nil
@@ -2127,20 +2150,47 @@ local function ResolveMockHotbarCost(unitData)
         return 0
     end
 
-    for _, key in ipairs({
-        "PlacementCost",
-        "Cost",
-        "DeployCost",
-        "BaseCost"
-    }) do
+    for _, key in ipairs({ "PlacementCost", "Cost", "DeployCost", "BaseCost" }) do
         local value = tonumber(unitData[key])
         if value then
             return math.max(0, value)
         end
     end
 
-    -- Keep this purely local. Supplying a concrete Cost prevents the native
-    -- hotbar renderer from falling back into calculated equipment stats.
+    -- HotbarLayout only needs the placement Cost. Read the base UpgradeInfo
+    -- directly instead of running GetCalculatedStatsFromData/GetEquipmentData.
+    local assets = nil
+    pcall(function()
+        assets = Fusion.peek(Dependencies.Assets)
+    end)
+    if type(assets) ~= "table" and type(Dependencies.Assets) == "table" then
+        assets = Dependencies.Assets
+    end
+
+    local assetInfo = type(assets) == "table" and assets[unitData.Asset] or nil
+    local upgrades = type(assetInfo) == "table" and assetInfo.UpgradeInfo or nil
+    if type(upgrades) == "table" then
+        local base = upgrades[0] or upgrades[1] or upgrades["0"] or upgrades["1"]
+        if type(base) ~= "table" then
+            local bestKey, bestValue
+            for key, value in pairs(upgrades) do
+                local numericKey = tonumber(key)
+                if numericKey and type(value) == "table"
+                    and (bestKey == nil or numericKey < bestKey) then
+                    bestKey, bestValue = numericKey, value
+                end
+            end
+            base = bestValue
+        end
+
+        if type(base) == "table" then
+            local cost = tonumber(base.Cost or base.PlacementCost or base.DeployCost)
+            if cost then
+                return math.max(0, cost)
+            end
+        end
+    end
+
     return 0
 end
 
@@ -2452,10 +2502,13 @@ local function RestorePersistentMockData()
     end
 
     if restored > 0 then
-        local newRoot = CloneMap(currentRoot)
-        newRoot.UnitData = newUnits
-        pcall(function() PlayerDataState:set(newRoot) end)
-        pcall(function() SetNativeUnitDataState(newUnits) end)
+        -- UnitData is the inventory-facing state we need. Replacing the complete
+        -- PlayerData root on rejoin unnecessarily invalidates unrelated Fusion
+        -- trees such as PlayerOverhead.
+        local okUnitRestore, unitRestoreErr = SetNativeUnitDataState(newUnits)
+        if not okUnitRestore then
+            warn("[BLACKSIGIL] Persistent UnitData restore warning:", unitRestoreErr)
+        end
         SafeLog("Persistence", string.format("restored %d mock units", restored))
     end
 
@@ -2888,7 +2941,7 @@ QueuePersistentSave()
 SafeLog("Loaded", string.format("Trait engine ready with %d live MockTraits; native banner summon engine ready", #TraitDatabase))
 SafeLog("Equip", "Visual mock equip/unequip enabled")
 SafeLog("Currency", "Native client affordability mirrors enabled")
-SafeLog("Hotbar", "Native Unit -> HotbarLayout overlay enabled (explicit local Cost)")
+SafeLog("Hotbar", "v15 native visuals + direct UpgradeInfo cost + rejoin-safe mock UnitData")
 SafeLog("Pity", "Summon pity 50/400/10000; trait pity Draconic 300 / Forsaken 500 / Primordial 750 / Unbound 1500")
 SafeLog("State", "Using leaf ItemData Values + PlayerData.HotbarData backing state")
 
