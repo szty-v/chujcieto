@@ -3230,36 +3230,6 @@ featureGroup:CreateToggle({
     end,
 }, "BannerSummonFeature")
 
-local detailsGroup = FeaturesTab:CreateGroupbox({
-    Name = "Feature Details",
-    Icon = StarlightIcon("info", "Material"),
-    Column = 1,
-}, "FeatureDetailsGroup")
-
-detailsGroup:CreateParagraph({
-    Name = "Trait Reroll Rules",
-    Content = "Trait history keeps the latest 50 rolls. Each reroll consumes 1 Trait Reroll. Trait pity targets: Draconic 300, Forsaken 500, Primordial 750, Unbound 1500. Rolling a target trait resets that trait's pity.",
-    Icon = StarlightIcon("history", "Material"),
-}, "TraitRulesInfo")
-
-detailsGroup:CreateParagraph({
-    Name = "Banner Pity",
-    Content = "Banner pity tracks Legendary 50, Mythic 400, and Secret 10,000. Each summon advances the relevant counters, and rolling a rarity resets its matching pity.",
-    Icon = StarlightIcon("leaderboard", "Material"),
-}, "BannerPityInfo")
-
-local persistenceGroup = FeaturesTab:CreateGroupbox({
-    Name = "Persistence",
-    Icon = StarlightIcon("save", "Material"),
-    Column = 2,
-}, "PersistenceInfoGroup")
-
-persistenceGroup:CreateParagraph({
-    Name = "Saved State",
-    Content = "BLACKSIGIL saves mock units, rolled traits, histories, pity counters, resource values, and equipped slots. Rejoining restores saved data and reconnects equipped units to their previous slots.",
-    Icon = StarlightIcon("cloud_done", "Material"),
-}, "PersistenceInfo")
-
 local function QueueBlackSigilForTeleport()
     local queueFn =
         queue_on_teleport
@@ -3289,19 +3259,7 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/szty-v/chujcieto/refs
     return true
 end
 
-local sessionGroup = SettingsTab:CreateGroupbox({
-    Name = "Session",
-    Icon = StarlightIcon("sync", "Material"),
-    Column = 1,
-}, "SessionGroup")
-
-sessionGroup:CreateParagraph({
-    Name = "Rejoin & Restore",
-    Content = "Rejoin the current server and automatically queue BLACKSIGIL for the next client session. Saved units, resources, pity, traits, and equipped slots are restored after the game loads.",
-    Icon = StarlightIcon("restart_alt", "Material"),
-}, "RejoinInfo")
-
-sessionGroup:CreateButton({
+featureGroup:CreateButton({
     Name = "Rejoin Current Server",
     Tooltip = "Save BLACKSIGIL state, queue the loader, and reconnect to this server.",
     Icon = StarlightIcon("restart_alt", "Material"),
@@ -3322,6 +3280,7 @@ sessionGroup:CreateButton({
         TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
     end,
 }, "RejoinServer")
+
 
 local dataGroup = SettingsTab:CreateGroupbox({
     Name = "Data Management",
