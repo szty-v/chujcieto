@@ -24,55 +24,10 @@ local function WaitForTeleportBootStability()
         end)
     end
 
-    local players = game:GetService("Players")
-    local replicatedStorage = game:GetService("ReplicatedStorage")
-
-    local player = players.LocalPlayer
-    local deadline = os.clock() + 35
-
-    while not player and os.clock() < deadline do
-        task.wait(0.1)
-        player = players.LocalPlayer
-    end
-
-    if not player then
-        return
-    end
-
-    local playerGui = player:WaitForChild("PlayerGui", 30)
-    if not playerGui then
-        return
-    end
-
-    replicatedStorage:WaitForChild("FusionPackage", 30)
-    replicatedStorage:WaitForChild("Nodes", 30)
-
-    -- BottomHUD can exist before its descendants are finished mounting.
-    -- Require a stable descendant count for ~2 seconds.
-    local stableTicks = 0
-    local lastCount = -1
-
-    while os.clock() < deadline and stableTicks < 8 do
-        local hud = playerGui:FindFirstChild("BottomHUD")
-        if hud then
-            local count = #hud:GetDescendants()
-            if count > 20 and count == lastCount then
-                stableTicks += 1
-            else
-                stableTicks = 0
-                lastCount = count
-            end
-        else
-            stableTicks = 0
-            lastCount = -1
-        end
-
-        task.wait(0.25)
-    end
-
-    -- Give PlayerScripts such as MountSharedHUD/MountTopBarCmdr one final frame
-    -- window before importing executor-side UI code.
-    task.wait(1)
+    -- The game is normally ready within ~2 seconds after teleport.
+    -- Use one predictable 3-second grace period instead of waiting for
+    -- BottomHUD descendant counts to stabilize for 8-10+ seconds.
+    task.wait(3)
 end
 
 WaitForTeleportBootStability()
@@ -2728,6 +2683,11 @@ local function RestorePersistentMockData()
         return
     end
 
+    -- Capture this first. SavePersistentState() serializes MockEquippedSlots,
+    -- which is empty until restoration has actually re-equipped the units.
+    -- Without this copy, the saved Equipped table gets overwritten with {}.
+    local savedEquipped = JsonSafeCopy(PersistedSnapshot.Equipped or {})
+
     local persistedUnits = PersistedSnapshot.MockUnits
     if type(persistedUnits) ~= "table" or next(persistedUnits) == nil then
         return
@@ -2761,12 +2721,9 @@ local function RestorePersistentMockData()
             warn("[BLACKSIGIL] Persistent UnitData restore warning:", unitRestoreErr)
         end
         SafeLog("Persistence", string.format("restored %d mock units", restored))
-        if SavePersistentState then
-            pcall(SavePersistentState)
-        end
     end
 
-    local equipped = PersistedSnapshot.Equipped
+    local equipped = savedEquipped
     if type(equipped) == "table" then
         task.spawn(function()
             -- Do not restore native hotbar components while Roblox is still
@@ -2786,54 +2743,59 @@ local function RestorePersistentMockData()
                 return a.Slot < b.Slot
             end)
 
+            -- The script itself already waited 3 seconds before loading.
+            -- Restore the exact saved slot immediately instead of waiting up to
+            -- 25 seconds per unit for a separate stabilization pass.
             for _, entry in ipairs(restoreList) do
-                local anchor = WaitForNativeHotbarAnchor(entry.Slot, 25)
+                -- Force the exact pre-rejoin slot. VisualEquipMockUnit normally
+                -- searches for a free slot when MockEquippedSlots is empty.
+                MockEquippedSlots[entry.UnitID] = entry.Slot
+                MockSlotUnits[entry.Slot] = entry.UnitID
 
-                if anchor then
-                    -- The anchor is confirmed stable immediately before equip,
-                    -- so MountMockNativeSlot should take the native path instead
-                    -- of creating a fallback overlay.
-                    local ok, equipResult, equipErr = pcall(
-                        VisualEquipMockUnit,
-                        entry.UnitID,
-                        entry.Slot
-                    )
+                local ok, equipResult, equipErr = pcall(
+                    VisualEquipMockUnit,
+                    entry.UnitID,
+                    entry.Slot
+                )
 
-                    if not ok then
-                        warn(
-                            "[BLACKSIGIL] Rejoin equip restore failed:",
-                            entry.UnitID,
-                            equipResult
-                        )
-                    elseif equipResult ~= true then
-                        warn(
-                            "[BLACKSIGIL] Rejoin equip restore skipped:",
-                            entry.UnitID,
-                            equipErr
-                        )
-                    else
-                        SafeLog(
-                            "Rejoin Restore",
-                            string.format(
-                                "%s -> native slot %d",
-                                entry.UnitID,
-                                entry.Slot
-                            )
-                        )
+                if not ok then
+                    -- Roll back the reserved slot on a hard failure.
+                    MockEquippedSlots[entry.UnitID] = nil
+                    if MockSlotUnits[entry.Slot] == entry.UnitID then
+                        MockSlotUnits[entry.Slot] = nil
                     end
-                else
-                    -- Inventory remains restored. We deliberately do not create
-                    -- a fallback during teleport startup because that was the
-                    -- source of invisible/spammed hotbar state.
                     warn(
-                        "[BLACKSIGIL] Rejoin hotbar anchor timeout; inventory kept:",
+                        "[BLACKSIGIL] Rejoin equip restore failed:",
                         entry.UnitID,
-                        "slot",
-                        entry.Slot
+                        equipResult
+                    )
+                elseif equipResult ~= true then
+                    MockEquippedSlots[entry.UnitID] = nil
+                    if MockSlotUnits[entry.Slot] == entry.UnitID then
+                        MockSlotUnits[entry.Slot] = nil
+                    end
+                    warn(
+                        "[BLACKSIGIL] Rejoin equip restore skipped:",
+                        entry.UnitID,
+                        equipErr
+                    )
+                else
+                    SafeLog(
+                        "Rejoin Restore",
+                        string.format(
+                            "%s -> restored slot %d",
+                            entry.UnitID,
+                            entry.Slot
+                        )
                     )
                 end
 
-                task.wait(0.15)
+                task.wait(0.05)
+            end
+
+            -- Save only AFTER all equipped state has been reconstructed.
+            if SavePersistentState then
+                pcall(SavePersistentState)
             end
         end)
     end
@@ -3269,7 +3231,7 @@ QueuePersistentSave()
 SafeLog("Loaded", string.format("Trait engine ready with %d live MockTraits; native banner summon engine ready", #TraitDatabase))
 SafeLog("Equip", "Visual mock equip/unequip enabled")
 SafeLog("Currency", "Native client affordability mirrors enabled")
-SafeLog("Hotbar", "v15 native visuals; rejoin waits for stable native anchors")
+SafeLog("Hotbar", "v15 native visuals; 3s rejoin boot + exact equipped-slot restore")
 SafeLog("Pity", "Summon pity 50/400/10000; trait pity Draconic 300 / Forsaken 500 / Primordial 750 / Unbound 1500")
 SafeLog("State", "Using leaf ItemData Values + PlayerData.HotbarData backing state")
 
