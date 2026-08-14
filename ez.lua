@@ -811,29 +811,37 @@ local function ApplyTraitToNativeLocalState(unitID, rolledTrait)
         return false, "invalid trait"
     end
 
-    local currentUnit = ReadNativeUnitRecord(unitID)
+    local currentUnits = GetNativeUnitDataSnapshot()
+    if type(currentUnits) ~= "table" then
+        return false, "UnitData unavailable"
+    end
 
+    local currentUnit = currentUnits[unitID]
     if type(currentUnit) ~= "table"
         and type(PersistedSnapshot) == "table"
         and type(PersistedSnapshot.MockUnits) == "table"
         and type(PersistedSnapshot.MockUnits[unitID]) == "table" then
         currentUnit = CloneMap(PersistedSnapshot.MockUnits[unitID])
-        currentUnit.BLACKSIGILMock = true
     end
 
     if type(currentUnit) ~= "table" then
         return false, "unit not found: " .. tostring(unitID)
     end
 
+    local newUnits = CloneMap(currentUnits)
     local newUnit = CloneMap(currentUnit)
     local newHistory = CloneArray(currentUnit.TraitHistory)
     local traitKey = rolledTrait.InternalName or rolledTrait.Name
     local oldTrait = currentUnit.Trait
-    local oldRollAmount = tonumber(currentUnit.TraitRollAmount) or 0
 
     newUnit.Trait = traitKey
-    newUnit.TraitRollAmount = oldRollAmount + 1
     newUnit.BLACKSIGILMock = true
+
+    -- Do not advance the native TraitRollAmount here. TraitReroll observes that
+    -- field specifically to invoke PlaySound/RerollTrait effects, and that native
+    -- callback reaches GetSettingValue from executor-created state and can error.
+    -- The trait itself is still fully reactive through UnitProcessor/TraitProcessor.
+    newUnit.TraitRollAmount = tonumber(currentUnit.TraitRollAmount) or 0
 
     table.insert(newHistory, 1, { traitKey, os.time() })
     while #newHistory > 50 do
@@ -841,15 +849,13 @@ local function ApplyTraitToNativeLocalState(unitID, rolledTrait)
     end
     newUnit.TraitHistory = newHistory
 
-    -- Critical: update the selected unit's leaf state, not the complete
-    -- PlayerData/UnitData container. TraitReroll's native UnitProcessor is
-    -- observing this exact leaf and will rebuild its native TraitProcessor UI.
-    local okWrite, writeErr = WriteNativeUnitRecord(unitID, newUnit)
-    if not okWrite then
-        return false, "unit leaf update failed: " .. tostring(writeErr)
-    end
-
+    newUnits[unitID] = newUnit
     MockUnitIDs[unitID] = true
+
+    local okWrite, writeErr = SetNativeUnitDataState(newUnits)
+    if not okWrite then
+        return false, "UnitData update failed: " .. tostring(writeErr)
+    end
 
     if type(PersistedSnapshot) == "table" then
         PersistedSnapshot.MockUnits = type(PersistedSnapshot.MockUnits) == "table"
@@ -858,11 +864,10 @@ local function ApplyTraitToNativeLocalState(unitID, rolledTrait)
     end
 
     SafeLog("Native Trait", string.format(
-        "%s: %s -> %s (roll %d)",
+        "%s: %s -> %s",
         unitID,
         tostring(oldTrait),
-        tostring(traitKey),
-        newUnit.TraitRollAmount
+        tostring(traitKey)
     ))
     return true
 end
@@ -1664,17 +1669,15 @@ local function DeductLocalBannerCurrency(root, bannerSnapshot, amount)
 end
 
 local function ApplyLocalSummonState(bannerID, bannerSnapshot, candidates, amount)
-    local ok, currentRoot = pcall(Fusion.peek, PlayerDataState)
-    if not ok or type(currentRoot) ~= "table" then
-        return false, "PlayerData peek failed"
-    end
-
-    local currentUnits = currentRoot.UnitData
+    -- Mock units intentionally live only in Dependencies.UnitData. The game's
+    -- AssetDataProcessor checks PlayerData.UnitData first and Dependencies.UnitData
+    -- second; keeping a second mock copy in PlayerData made TraitReroll read stale
+    -- data after local rerolls.
+    local currentUnits = GetNativeUnitDataSnapshot()
     if type(currentUnits) ~= "table" then
-        return false, "PlayerData.UnitData missing"
+        return false, "UnitData unavailable"
     end
 
-    local newRoot = CloneMap(currentRoot)
     local newUnits = CloneMap(currentUnits)
     local results = {}
 
@@ -1714,21 +1717,14 @@ local function ApplyLocalSummonState(bannerID, bannerSnapshot, candidates, amoun
         return false, "banner pool produced no units"
     end
 
-    newRoot.UnitData = newUnits
-    UpdateLocalBannerProgress(newRoot, bannerID, results)
-    DeductLocalBannerCurrency(newRoot, bannerSnapshot, #results)
-
-    local okSet, setErr = pcall(function()
-        PlayerDataState:set(newRoot)
-        local unitSyncOk, unitSyncErr = SetNativeUnitDataState(newUnits)
-        if not unitSyncOk then
-            warn("[BLACKSIGIL] UnitData sync warning:", unitSyncErr)
-        end
-    end)
-
-    if not okSet then
-        return false, "PlayerData:set failed: " .. tostring(setErr)
+    local unitSyncOk, unitSyncErr = SetNativeUnitDataState(newUnits)
+    if not unitSyncOk then
+        return false, "UnitData sync failed: " .. tostring(unitSyncErr)
     end
+
+    -- Currency/pity are BLACKSIGIL visual state and do not require a PlayerData
+    -- root replacement.
+    DeductLocalBannerCurrency({}, bannerSnapshot, #results)
 
     SyncAllDisplays()
     QueuePersistentSave()
