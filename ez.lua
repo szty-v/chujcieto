@@ -1060,6 +1060,64 @@ local function RenderTraitResult(rolledTrait)
     return renderedAnything
 end
 
+
+local function SyncTraitRerollCountDirect(previousAmount)
+    local wanted = tostring(math.max(0, math.floor(tonumber(VisualState.TraitRerolls) or 0)))
+
+    -- Primary exact path supplied from the live TraitReroll GUI.
+    local exact = UIPaths.TraitRerollExactCount()
+    if exact and exact:IsA("TextLabel") then
+        exact.Text = wanted
+    end
+
+    -- The GUI can rebuild/reorder children after UnitData changes. During that
+    -- brief window, locate the previous pure-number reroll counter under Overlay
+    -- and update it too. Pity labels contain "/" and therefore are ignored.
+    local rerollGui = PlayerGui:FindFirstChild("TraitReroll")
+    local overlay = rerollGui
+        and rerollGui:FindFirstChild("Frame")
+        and rerollGui.Frame:FindFirstChild("Folder")
+        and rerollGui.Frame.Folder:FindFirstChild("Overlay")
+
+    if overlay then
+        local previousText = previousAmount ~= nil and tostring(math.floor(tonumber(previousAmount) or 0)) or nil
+
+        for _, obj in ipairs(overlay:GetDescendants()) do
+            if obj:IsA("TextLabel") then
+                local currentText = tostring(obj.Text or "")
+                local numericOnly = currentText:match("^%s*[%d,]+%s*$") ~= nil
+
+                if numericOnly then
+                    local stripped = currentText:gsub(",", ""):gsub("%s+", "")
+                    if stripped == wanted or (previousText and stripped == previousText) then
+                        obj.Text = wanted
+                    end
+                end
+            end
+        end
+    end
+end
+
+local function SettleTraitRerollVisuals(rolledTrait, previousAmount)
+    -- Native UnitData/Fusion updates can reconstruct the TraitReroll panel a
+    -- frame or two after the mock roll. Re-apply only presentation data while
+    -- that rebuild settles; no additional rolls/history/pity are performed.
+    local function apply()
+        SyncTraitRerollCountDirect(previousAmount)
+        RenderTraitResult(rolledTrait)
+        SyncTraitPityDisplays()
+    end
+
+    apply()
+
+    task.spawn(function()
+        for _, delayTime in ipairs({0.03, 0.08, 0.16, 0.30, 0.55}) do
+            task.wait(delayTime)
+            apply()
+        end
+    end)
+end
+
 local LastRerollIntercept = 0
 local REROLL_INTERCEPT_WINDOW = 0.12
 local RerollInProgress = false
@@ -1089,6 +1147,7 @@ local function PerformVisualReroll(unitID, confirmed, options)
         end
 
         local appliedNative, nativeErr = ApplyTraitToNativeLocalState(unitID, rolledTrait)
+        local previousRerollAmount = VisualState.TraitRerolls
 
         if options.Consume ~= false then
             VisualState.TraitRerolls = math.max(0, VisualState.TraitRerolls - 1)
@@ -1106,10 +1165,6 @@ local function PerformVisualReroll(unitID, confirmed, options)
         VisualState.LastTrait = rolledTrait
         QueuePersistentSave()
 
-        -- Render from MockTraits directly every time. This keeps the name,
-        -- description, chance and icon visible even when the native Trait
-        -- processor is rebuilding after a rejoin.
-        RenderTraitResult(rolledTrait)
         AddTraitToHistory(rolledTrait)
 
         if appliedNative then
@@ -1119,7 +1174,9 @@ local function PerformVisualReroll(unitID, confirmed, options)
         else
             warn("[BLACKSIGIL] Native local trait state failed:", nativeErr)
         end
+
         SyncAllDisplays()
+        SettleTraitRerollVisuals(rolledTrait, previousRerollAmount)
 
         SafeLog("VISUAL REROLL", string.format("%s -> %s (%s, %.4f%%)%s", tostring(unitID), tostring(rolledTrait.Name), tostring(rolledTrait.Rarity), (rolledTrait.Chance or 0) * 100, confirmed and " [confirmed]" or ""))
         return true
@@ -2213,6 +2270,30 @@ local function ResolveMockHotbarCost(unitData)
 end
 
 local function MountMockNativeSlot(unitID, slot)
+    -- Do not tear down/recreate the same visual repeatedly. During rejoin and
+    -- TraitReroll rebuilds several callers can request the same mount.
+    local existingView = MockSlotViews[unitID]
+    if existingView
+        and existingView.Slot == slot
+        and typeof(existingView.Host) == "Instance"
+        and existingView.Host.Parent then
+
+        local nativeAnchor = FindNativeHotbarSlotAnchor(slot)
+
+        if existingView.NativeMounted then
+            -- Already mounted in the native slot; keep the stable v15 visual.
+            return true
+        end
+
+        if not nativeAnchor then
+            -- A valid fallback is already on screen. Wait for its existing
+            -- promotion worker rather than spawning another fallback/log entry.
+            return true
+        end
+
+        -- The real anchor has finally appeared; promote exactly once.
+    end
+
     CleanupMockNativeSlot(unitID)
 
     local unitData = GetCurrentMockUnitData(unitID)
@@ -2286,11 +2367,18 @@ local function MountMockNativeSlot(unitID, slot)
         end))
     else
         -- Promote fallback into the real slot once BottomHUD is available.
+        -- Only this newly-created fallback owns a promotion worker.
         task.defer(function()
-            for _ = 1, 20 do
+            for _ = 1, 80 do
                 if MockEquippedSlots[unitID] ~= slot then
                     return
                 end
+
+                local view = MockSlotViews[unitID]
+                if view and view.NativeMounted then
+                    return
+                end
+
                 task.wait(0.1)
                 if FindNativeHotbarSlotAnchor(slot) then
                     local ok, err = pcall(MountMockNativeSlot, unitID, slot)
@@ -2969,7 +3057,7 @@ QueuePersistentSave()
 SafeLog("Loaded", string.format("Trait engine ready with %d live MockTraits; native banner summon engine ready", #TraitDatabase))
 SafeLog("Equip", "Visual mock equip/unequip enabled")
 SafeLog("Currency", "Native client affordability mirrors enabled")
-SafeLog("Hotbar", "v15 native visuals + direct UpgradeInfo cost + rejoin-safe mock UnitData")
+SafeLog("Hotbar", "v15 native visuals; idempotent fallback mounts; reroll UI settling enabled")
 SafeLog("Pity", "Summon pity 50/400/10000; trait pity Draconic 300 / Forsaken 500 / Primordial 750 / Unbound 1500")
 SafeLog("State", "Using leaf ItemData Values + PlayerData.HotbarData backing state")
 
