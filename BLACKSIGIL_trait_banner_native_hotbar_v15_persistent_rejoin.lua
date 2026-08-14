@@ -38,7 +38,7 @@ local StarterPlayer = game:GetService("StarterPlayer")
 local LocalPlayer = Players.LocalPlayer
 
 -- Set this to the raw URL hosting this BLACKSIGIL build for rejoin auto-execution.
-local BLACKSIGIL_RAW_URL = "https://github.com/szty-v/chujcieto/raw/refs/heads/main/BLACKSIGIL_trait_banner_native_hotbar_v15_persistent_rejoin.luaE"
+local BLACKSIGIL_RAW_URL = "https://github.com/szty-v/chujcieto/raw/refs/heads/main/BLACKSIGIL_trait_banner_native_hotbar_v15_persistent_rejoin.lua"
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
 -- Restore normal BLACKSIGIL rejoin after execution/rejoin.
