@@ -1,14 +1,14 @@
 --[[
-    BLACKSIGIL - Anime Vanguards (Cascade UI Complete Edition)
-    Trait + Banner Visual Engine - Native Fusion Edition
+    BLACKSIGIL - Anime Vanguards (Starlight Interface Edition)
+    Trait + Banner Feature Engine - Native Fusion Edition
 
-    This build keeps the existing visual/client-side behavior while
+    This build keeps the existing feature behavior while
     replacing the hardcoded trait database with the game's MockTraits module.
 ]]
 
 -- Rejoin auto-execution starts much earlier than a manual execute.
 -- On teleport boots, let Roblox finish constructing its own HUD/PlayerScripts
--- before BLACKSIGIL imports Cascade/Fusion UI modules.
+-- before BLACKSIGIL imports Starlight/Fusion UI modules.
 local __BLACKSIGIL_ENV = (type(getgenv) == "function" and getgenv()) or _G
 local __BLACKSIGIL_TELEPORT_BOOT = __BLACKSIGIL_ENV.BLACKSIGIL_TELEPORT_BOOT == true
 __BLACKSIGIL_ENV.BLACKSIGIL_TELEPORT_BOOT = nil
@@ -33,26 +33,44 @@ end
 WaitForTeleportBootStability()
 
 -- ================================
--- CASCADE UI INITIALIZATION
+-- STARLIGHT UI INITIALIZATION
 -- ================================
-local function importRelease(owner, repo, version, file)
-    local tag = (version == "latest" and "latest/download" or "download/"..version)
-    local url = ("https://github.com/%s/%s/releases/%s/%s"):format(owner, repo, tag, file)
-    
-    local success, result = pcall(function()
-        return game:HttpGetAsync(url)
+local __uiEnv = (type(getgenv) == "function" and getgenv()) or _G
+__uiEnv.InterfaceName = "BLACKSIGIL"
+
+local Starlight
+local NebulaIcons
+
+do
+    local ok, result = pcall(function()
+        return loadstring(game:HttpGet("https://raw.nebulasoftworks.xyz/starlight"))()
     end)
-    
-    if not success then
-        warn("Failed to fetch Cascade UI: " .. tostring(result))
-        return nil
+    if ok then
+        Starlight = result
+    else
+        warn("[BLACKSIGIL] Failed to load Starlight:", result)
+        return
     end
-    
-    return loadstring(result, file)()
 end
 
-local cascade = importRelease("cascadeui", "Cascade", "latest", "dist.luau")
-if not cascade then return end
+do
+    local ok, result = pcall(function()
+        return loadstring(game:HttpGet("https://raw.nebulasoftworks.xyz/nebula-icon-library-loader"))()
+    end)
+    if ok then
+        NebulaIcons = result
+    else
+        warn("[BLACKSIGIL] Failed to load Nebula Icons:", result)
+        return
+    end
+end
+
+local function StarlightIcon(name, source)
+    local ok, icon = pcall(function()
+        return NebulaIcons:GetIcon(name, source or "Material")
+    end)
+    return ok and icon or nil
+end
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -160,36 +178,37 @@ local SharedUtils = require(SharedFolder:WaitForChild("Utils"))
 -- ================================
 -- APP & WINDOW SETUP
 -- ================================
-local app = cascade.New({
+local Window = Starlight:CreateWindow({
     Name = "BLACKSIGIL",
-    Theme = cascade.Themes.Dark,
-    Accent = cascade.Accents.Green,
-    WindowPill = true,
+    Subtitle = "Anime Vanguards",
+    Icon = StarlightIcon("shield", "Material"),
+    LoadingEnabled = true,
+    LoadingSettings = {
+        Title = "BLACKSIGIL",
+        Subtitle = "Loading features and saved data",
+    },
+    FileSettings = {
+        ConfigFolder = "BLACKSIGIL",
+    },
+    InterfaceAdvertisingPrompts = false,
+    NotifyOnCallbackError = true,
+    DefaultSize = UDim2.fromOffset(900, 620),
 })
 
-local window = app:Window({
-    Title = "BLACKSIGIL",
-    Subtitle = "Anime Vanguards - 2026",
-    Draggable = true,
-    Resizable = true,
-    Searching = true,
-})
+local MainSection = Window:CreateTabSection("BLACKSIGIL", false)
+local SettingsSection = Window:CreateTabSection("Configuration")
 
--- Sidebar Sections
-local visualSection = window:Section({ Title = "Visuals", Expanded = true })
-local settingsSection = window:Section({ Title = "Settings", Expanded = true })
+local FeaturesTab = MainSection:CreateTab({
+    Name = "Features",
+    Icon = StarlightIcon("auto_awesome", "Material"),
+    Columns = 2,
+}, "FeaturesTab")
 
--- Tabs
-local mainTab = visualSection:Tab({
-    Title = "Visual Spoofing",
-    Icon = cascade.Symbols.squareStack3dUp,
-    Selected = true,
-})
-
-local settingsTab = settingsSection:Tab({
-    Title = "Settings",
-    Icon = cascade.Symbols.gear,
-})
+local SettingsTab = SettingsSection:CreateTab({
+    Name = "Settings",
+    Icon = StarlightIcon("settings", "Material"),
+    Columns = 2,
+}, "SettingsTab")
 
 -- ================================
 -- SAFE LOGGING
@@ -3115,119 +3134,131 @@ oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
 end))
 
 -- ================================
--- UI PAGE: VISUAL SPOOFING
+-- UI PAGE: FEATURES
 -- ================================
-local currencyGroup = mainTab:PageSection({ Title = "Currency Sliders", Subtitle = "Adjust your visual currency amounts." })
-local currencyForm = currencyGroup:Form()
+local currencyGroup = FeaturesTab:CreateGroupbox({
+    Name = "Currency & Resources",
+    Icon = StarlightIcon("paid", "Material"),
+    Column = 1,
+}, "CurrencyGroup")
 
--- Gems Slider
-local gemsRow = currencyForm:Row({ SearchIndex = "Gems Amount" })
-gemsRow:Left():TitleStack({ Title = "Gems Amount", Subtitle = "Adjust your visual gems count." })
-gemsRow:Right():Slider({
-    Minimum = 0,
-    Maximum = 1000000,
-    Value = VisualState.Gems,
-    ValueChanged = function(self, val)
-        VisualState.Gems = math.floor(val)
+currencyGroup:CreateParagraph({
+    Name = "Resource Controls",
+    Content = "Manage the values BLACKSIGIL uses for Gems, Gold, and Trait Rerolls. Changes are applied immediately and saved with your BLACKSIGIL data.",
+    Icon = StarlightIcon("account_balance_wallet", "Material"),
+}, "CurrencyInfo")
+
+currencyGroup:CreateSlider({
+    Name = "Gems",
+    Tooltip = "Set the Gems amount used by BLACKSIGIL features and the game HUD.",
+    Icon = StarlightIcon("diamond", "Material"),
+    Range = {0, 1000000},
+    Increment = 1,
+    CurrentValue = VisualState.Gems,
+    Callback = function(value)
+        VisualState.Gems = math.floor(tonumber(value) or 0)
         local ok, err = SetLocalItemAmount("Gem", VisualState.Gems)
         if not ok then warn("[BLACKSIGIL] Gem slider sync warning:", err) end
         SyncAllDisplays()
         QueuePersistentSave()
-    end
-})
+    end,
+}, "GemsAmount")
 
--- Gold Slider
-local goldRow = currencyForm:Row({ SearchIndex = "Gold Amount" })
-goldRow:Left():TitleStack({ Title = "Gold Amount", Subtitle = "Adjust your visual gold count." })
-goldRow:Right():Slider({
-    Minimum = 0,
-    Maximum = 10000000,
-    Value = VisualState.Gold,
-    ValueChanged = function(self, val)
-        VisualState.Gold = math.floor(val)
+currencyGroup:CreateSlider({
+    Name = "Gold",
+    Tooltip = "Set the Gold amount displayed and maintained by BLACKSIGIL.",
+    Icon = StarlightIcon("monetization_on", "Material"),
+    Range = {0, 10000000},
+    Increment = 1,
+    CurrentValue = VisualState.Gold,
+    Callback = function(value)
+        VisualState.Gold = math.floor(tonumber(value) or 0)
         SyncAllDisplays()
         QueuePersistentSave()
-    end
-})
+    end,
+}, "GoldAmount")
 
--- Rerolls Slider
-local rerollRow = currencyForm:Row({ SearchIndex = "Trait Rerolls" })
-rerollRow:Left():TitleStack({ Title = "Trait Rerolls", Subtitle = "Adjust your visual reroll count." })
-rerollRow:Right():Slider({
-    Minimum = 0,
-    Maximum = 100000,
-    Value = VisualState.TraitRerolls,
-    ValueChanged = function(self, val)
-        VisualState.TraitRerolls = math.floor(val)
+currencyGroup:CreateSlider({
+    Name = "Trait Rerolls",
+    Tooltip = "Set the Trait Reroll balance used when rerolling mock units.",
+    Icon = StarlightIcon("casino", "Material"),
+    Range = {0, 100000},
+    Increment = 1,
+    CurrentValue = VisualState.TraitRerolls,
+    Callback = function(value)
+        VisualState.TraitRerolls = math.floor(tonumber(value) or 0)
         local ok, err = SetLocalItemAmount(GetTraitRerollItemName(), VisualState.TraitRerolls)
         if not ok then warn("[BLACKSIGIL] Reroll slider sync warning:", err) end
         SyncAllDisplays()
         QueuePersistentSave()
-    end
-})
+    end,
+}, "TraitRerollAmount")
 
-local protectionGroup = mainTab:PageSection({ Title = "Spoof Controls & Protection", Subtitle = "Enable server-side call blocking." })
-local protectionForm = protectionGroup:Form()
+local featureGroup = FeaturesTab:CreateGroupbox({
+    Name = "Core Features",
+    Icon = StarlightIcon("tune", "Material"),
+    Column = 2,
+}, "CoreFeatureGroup")
 
--- Trait Rollback Toggle
-local traitRollbackRow = protectionForm:Row({ SearchIndex = "Visual Trait Rollback" })
-traitRollbackRow:Left():TitleStack({ Title = "Visual Trait Rollback", Subtitle = "Block trait rerolls from hitting the server." })
-traitRollbackRow:Right():Toggle({
-    Value = _G.AVTraitRollback,
-    ValueChanged = function(self, val)
-        _G.AVTraitRollback = val
-        SafeLog("Notice", "notification suppressed")
-    end
-})
+featureGroup:CreateParagraph({
+    Name = "Feature Routing",
+    Content = "Enable the BLACKSIGIL handlers for trait rerolls and banner summons. Mock-unit inventory, hotbar, trait history, pity, equipped state, and rejoin persistence are handled automatically.",
+    Icon = StarlightIcon("hub", "Material"),
+}, "FeatureInfo")
 
--- Summon Rollback Toggle
-local summonRollbackRow = protectionForm:Row({ SearchIndex = "Visual Summon Rollback" })
-summonRollbackRow:Left():TitleStack({
-    Title = "Visual Summon Rollback",
-    Subtitle = "Block BANNER_SUMMON and generate the result locally."
-})
-summonRollbackRow:Right():Toggle({
-    Value = _G.AVSummonRollback,
-    ValueChanged = function(self, val)
-        _G.AVSummonRollback = val
-        SafeLog("Summon Rollback", val and "Enabled" or "Disabled")
-    end
-})
+featureGroup:CreateToggle({
+    Name = "Trait Rerolls",
+    Tooltip = "Enable BLACKSIGIL trait rerolls for mock units, including resource usage, history, pity, inventory updates, and equipped-unit refreshes.",
+    Icon = StarlightIcon("autorenew", "Material"),
+    CurrentValue = _G.AVTraitRollback,
+    Style = 2,
+    Callback = function(value)
+        _G.AVTraitRollback = value == true
+        SafeLog("Trait Rerolls", _G.AVTraitRollback and "Enabled" or "Disabled")
+    end,
+}, "TraitRerollFeature")
 
--- Trait Engine Actions
-local traitActionRow = protectionForm:Row({ SearchIndex = "Trait Engine Actions" })
-traitActionRow:Left():TitleStack({
-    Title = "Trait Engine",
-    Subtitle = "Reload live MockTraits or test the renderer locally."
-})
+featureGroup:CreateToggle({
+    Name = "Banner Summons",
+    Tooltip = "Enable BLACKSIGIL banner summons, rarity rolls, pity progression, inventory additions, and saved summon results.",
+    Icon = StarlightIcon("stars", "Material"),
+    CurrentValue = _G.AVSummonRollback,
+    Style = 2,
+    Callback = function(value)
+        _G.AVSummonRollback = value == true
+        SafeLog("Banner Summons", _G.AVSummonRollback and "Enabled" or "Disabled")
+    end,
+}, "BannerSummonFeature")
 
-local traitActionStack = traitActionRow:Right():HStack({ Padding = UDim.new(0, 5) })
+local detailsGroup = FeaturesTab:CreateGroupbox({
+    Name = "Feature Details",
+    Icon = StarlightIcon("info", "Material"),
+    Column = 1,
+}, "FeatureDetailsGroup")
 
-traitActionStack:Button({
-    Label = "Reload Traits",
-    State = "Primary",
-    Pushed = function()
-        local ok, detail = RefreshTraitDatabase(true)
-        if not ok then
-            SafeLog("Notice", "notification suppressed")
-        end
-    end
-})
+detailsGroup:CreateParagraph({
+    Name = "Trait Reroll Rules",
+    Content = "Trait history keeps the latest 50 rolls. Each reroll consumes 1 Trait Reroll. Trait pity targets: Draconic 300, Forsaken 500, Primordial 750, Unbound 1500. Rolling a target trait resets that trait's pity.",
+    Icon = StarlightIcon("history", "Material"),
+}, "TraitRulesInfo")
 
+detailsGroup:CreateParagraph({
+    Name = "Banner Pity",
+    Content = "Banner pity tracks Legendary 50, Mythic 400, and Secret 10,000. Each summon advances the relevant counters, and rolling a rarity resets its matching pity.",
+    Icon = StarlightIcon("leaderboard", "Material"),
+}, "BannerPityInfo")
 
--- Action Buttons
-local actionRow = protectionForm:Row()
-local actionStack = actionRow:Right():HStack({ Padding = UDim.new(0, 5) })
+local persistenceGroup = FeaturesTab:CreateGroupbox({
+    Name = "Persistence",
+    Icon = StarlightIcon("save", "Material"),
+    Column = 2,
+}, "PersistenceInfoGroup")
 
-actionStack:Button({
-    Label = "Force Refresh HUD",
-    State = "Primary",
-    Pushed = function()
-        SyncAllDisplays()
-        SafeLog("Notice", "notification suppressed")
-    end
-})
-
+persistenceGroup:CreateParagraph({
+    Name = "Saved State",
+    Content = "BLACKSIGIL saves mock units, rolled traits, histories, pity counters, resource values, and equipped slots. Rejoining restores saved data and reconnects equipped units to their previous slots.",
+    Icon = StarlightIcon("cloud_done", "Material"),
+}, "PersistenceInfo")
 
 local function QueueBlackSigilForTeleport()
     local queueFn =
@@ -3258,10 +3289,25 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/szty-v/chujcieto/refs
     return true
 end
 
-actionStack:Button({
-    Label = "Rejoin Server",
-    State = "Destructive",
-    Pushed = function()
+local sessionGroup = SettingsTab:CreateGroupbox({
+    Name = "Session",
+    Icon = StarlightIcon("sync", "Material"),
+    Column = 1,
+}, "SessionGroup")
+
+sessionGroup:CreateParagraph({
+    Name = "Rejoin & Restore",
+    Content = "Rejoin the current server and automatically queue BLACKSIGIL for the next client session. Saved units, resources, pity, traits, and equipped slots are restored after the game loads.",
+    Icon = StarlightIcon("restart_alt", "Material"),
+}, "RejoinInfo")
+
+sessionGroup:CreateButton({
+    Name = "Rejoin Current Server",
+    Tooltip = "Save BLACKSIGIL state, queue the loader, and reconnect to this server.",
+    Icon = StarlightIcon("restart_alt", "Material"),
+    Style = 2,
+    IndicatorStyle = 1,
+    Callback = function()
         QueuePersistentSave()
         if SavePersistentState then
             pcall(SavePersistentState)
@@ -3274,37 +3320,50 @@ actionStack:Button({
 
         task.wait(0.15)
         TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
-    end
-})
+    end,
+}, "RejoinServer")
 
--- ================================
--- UI PAGE: SETTINGS
--- ================================
-local engineGroup = settingsTab:PageSection({ Title = "Blacksigil Engine", Subtitle = "General script information." })
-engineGroup:Label({ Text = "Toggle the panel anytime using RightShift." })
+local dataGroup = SettingsTab:CreateGroupbox({
+    Name = "Data Management",
+    Icon = StarlightIcon("database", "Material"),
+    Column = 2,
+}, "DataManagementGroup")
 
-local themeRow = engineGroup:Form():Row()
-themeRow:Left():TitleStack({ Title = "UI Theme", Subtitle = "Switch between Light and Dark." })
-themeRow:Right():Toggle({
-    Value = app.Theme == cascade.Themes.Dark,
-    ValueChanged = function(self, val)
-        app.Theme = val and cascade.Themes.Dark or cascade.Themes.Light
-    end
-})
+dataGroup:CreateParagraph({
+    Name = "Reset BLACKSIGIL Data",
+    Content = "This permanently clears BLACKSIGIL's saved mock units, traits, histories, pity counters, equipped slots, and saved resource state. Use this when you want a completely fresh BLACKSIGIL profile.",
+    Icon = StarlightIcon("delete_forever", "Material"),
+}, "DeleteDataInfo")
 
-
-local dataRow = engineGroup:Form():Row({ SearchIndex = "Delete All Mock Data" })
-dataRow:Left():TitleStack({
-    Title = "Delete All Mock Data",
-    Subtitle = "Remove saved mock units, traits, histories, pities and visual state."
-})
-dataRow:Right():Button({
-    Label = "Delete Mock Data",
-    State = "Destructive",
-    Pushed = function()
+dataGroup:CreateButton({
+    Name = "Delete All Mock Data",
+    Tooltip = "Clear all BLACKSIGIL mock data and reset its saved state.",
+    Icon = StarlightIcon("delete_forever", "Material"),
+    Style = 2,
+    Callback = function()
         DeleteAllMockData()
-    end
-})
+    end,
+}, "DeleteMockData")
+
+local aboutGroup = SettingsTab:CreateGroupbox({
+    Name = "BLACKSIGIL",
+    Icon = StarlightIcon("shield", "Material"),
+    Column = 2,
+}, "AboutGroup")
+
+aboutGroup:CreateParagraph({
+    Name = "Anime Vanguards Edition",
+    Content = "Trait rerolls, banner summons, mock inventory, equip/hotbar integration, workspace followers, pity systems, and persistent rejoin restoration in one interface.",
+    Icon = StarlightIcon("auto_awesome", "Material"),
+}, "AboutInfo")
+
+-- Starlight's built-in appearance controls. This uses the library's theme
+-- system instead of maintaining a separate custom Light/Dark toggle.
+SettingsTab:BuildThemeGroupbox(1)
+
+pcall(function()
+    Starlight:LoadAutoloadTheme()
+end)
 
 -- TraitReroll is created lazily. Keep a lightweight waiter alive so exact
 -- reroll count + index pity text/bars are applied as soon as its descendants exist.
@@ -3366,6 +3425,6 @@ SafeLog("Pity", "Summon pity 50/400/10000; trait pity Draconic 300 / Forsaken 50
 SafeLog("State", "Using leaf ItemData Values + PlayerData.HotbarData backing state")
 
 print(string.format(
-    "BLACKSIGIL - Anime Vanguards (Cascade Edition) initialized with %d live traits and banner summon rollback.",
+    "BLACKSIGIL - Anime Vanguards (Starlight Edition) initialized with %d live traits and banner summon support.",
     #TraitDatabase
 ))
