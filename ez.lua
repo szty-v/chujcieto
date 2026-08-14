@@ -2123,6 +2123,110 @@ local function CreateMockSlotHost(anchor, slot)
     return host, false
 end
 
+local function ResolveMockPlacementCost(unitID, unitData, slot)
+    -- 1) Preserve any cost already cached on this mock record.
+    for _, key in ipairs({"PlacementCost", "Cost", "DeployCost"}) do
+        local value = tonumber(unitData and unitData[key])
+        if value and value > 0 then
+            return value
+        end
+    end
+
+    -- 2) If a live hotbar entry for the same asset exists, reuse its native cost.
+    local realHotbar = GetRealHotbarSnapshot()
+    local slots = type(realHotbar) == "table" and realHotbar.Slots or nil
+    if type(slots) == "table" then
+        for _, realSlot in pairs(slots) do
+            if type(realSlot) == "table" then
+                local sameID = realSlot.ID == unitID
+                local sameAsset = unitData and realSlot.Asset == unitData.Asset
+                if sameID or sameAsset then
+                    local value = tonumber(realSlot.PlacementCost)
+                    if value and value > 0 then
+                        return value
+                    end
+                end
+            end
+        end
+
+        local indexed = slots[tostring(slot)] or slots[slot]
+        if type(indexed) == "table" then
+            local value = tonumber(indexed.PlacementCost)
+            if value and value > 0 then
+                return value
+            end
+        end
+    end
+
+    -- 3) Best-effort tower data lookup OUTSIDE Fusion callbacks.
+    -- This is intentionally protected; failure only hides the price label.
+    local asset = unitData and unitData.Asset
+    if type(asset) == "string" and asset ~= "" then
+        local dataFolder = ReplicatedStorage:FindFirstChild("Shared")
+        dataFolder = dataFolder and dataFolder:FindFirstChild("Data")
+        local towers = dataFolder and dataFolder:FindFirstChild("Towers")
+        local module = towers and towers:FindFirstChild(asset)
+
+        if module and module:IsA("ModuleScript") then
+            local ok, info = pcall(require, module)
+            if ok and type(info) == "table" then
+                local candidates = {
+                    info.PlacementCost,
+                    info.Cost,
+                    info.DeployCost,
+                    type(info.Stats) == "table" and info.Stats.PlacementCost or nil,
+                    type(info.Stats) == "table" and info.Stats.Cost or nil,
+                    type(info.Base) == "table" and info.Base.PlacementCost or nil,
+                    type(info.Base) == "table" and info.Base.Cost or nil,
+                }
+                for _, value in ipairs(candidates) do
+                    value = tonumber(value)
+                    if value and value > 0 then
+                        return value
+                    end
+                end
+            end
+        end
+    end
+
+    return nil
+end
+
+local function CreateMockPlacementCostLabel(host, cost)
+    if not host then
+        return nil
+    end
+
+    local old = host:FindFirstChild("BLACKSIGIL_PlacementCost")
+    if old then
+        old:Destroy()
+    end
+
+    cost = tonumber(cost)
+    if not cost or cost <= 0 then
+        return nil
+    end
+
+    local label = Instance.new("TextLabel")
+    label.Name = "BLACKSIGIL_PlacementCost"
+    label.BackgroundTransparency = 1
+    label.BorderSizePixel = 0
+    label.AnchorPoint = Vector2.new(0.5, 1)
+    label.Position = UDim2.new(0.5, 0, 1, -3)
+    label.Size = UDim2.new(1, -8, 0, 24)
+    label.ZIndex = 250
+    label.Font = Enum.Font.GothamBold
+    label.Text = "¥" .. tostring(math.floor(cost))
+    label.TextColor3 = Color3.new(1, 1, 1)
+    label.TextStrokeColor3 = Color3.new(0, 0, 0)
+    label.TextStrokeTransparency = 0.15
+    label.TextScaled = true
+    label.TextXAlignment = Enum.TextXAlignment.Center
+    label.Parent = host
+
+    return label
+end
+
 local function MountMockNativeSlot(unitID, slot)
     CleanupMockNativeSlot(unitID)
 
@@ -2154,18 +2258,16 @@ local function MountMockNativeSlot(unitID, slot)
         AssetType = "Unit"
     })
 
-    -- Real Hotbar passes PlacementCost separately as Cost. For our mock slot,
-    -- derive it from the current real slot/template when available; otherwise
-    -- leave it nil and UnitStatsProcessor can calculate from the unit data.
-    local costState = scope:Value(nil)
-    do
-        local realHotbar = GetRealHotbarSnapshot()
-        local slots = type(realHotbar.Slots) == "table" and realHotbar.Slots or {}
-        local realSlot = slots[tostring(slot)] or slots[slot]
-        if type(realSlot) == "table" and tonumber(realSlot.PlacementCost) then
-            costState:set(tonumber(realSlot.PlacementCost))
-        end
-    end
+    -- IMPORTANT: do not use Unit.HotbarLayout for mock slots.
+    -- HotbarLayout creates UnitStatsProcessor which eventually calls
+    -- Actions.GetEquipmentData/GetCalculatedStatsFromData. Those native actions
+    -- attempt a require from a RobloxScript-only context and throw when the mock
+    -- component was mounted by an executor thread.
+    --
+    -- We resolve the displayed placement cost once, outside any Fusion Computed,
+    -- and draw it ourselves below the native Unit viewport.
+    local resolvedCost = ResolveMockPlacementCost(unitID, unitData, slot)
+    local costState = scope:Value(resolvedCost)
 
     local instance = scope:Slot({
         Parent = host,
@@ -2173,7 +2275,9 @@ local function MountMockNativeSlot(unitID, slot)
         Position = UDim2.fromScale(0.5, 0.5),
         AnchorPoint = Vector2.new(0.5, 0.5),
 
-        DisplayType = "Hotbar",
+        -- Textless keeps the native Slot -> Unit viewport/trait presentation,
+        -- but deliberately skips Unit.HotbarLayout and its unsafe UnitStats path.
+        DisplayType = "Textless",
         AssetType = "Unit",
         AssetStates = assetStates,
         Cost = costState,
@@ -2198,6 +2302,8 @@ local function MountMockNativeSlot(unitID, slot)
         end
     })
 
+    local costLabel = CreateMockPlacementCostLabel(host, resolvedCost)
+
     local connections = {}
 
     -- If BottomHUD rebuilds the empty slot, remount into the new native slot.
@@ -2218,7 +2324,7 @@ local function MountMockNativeSlot(unitID, slot)
     else
         -- Promote fallback into the real slot once BottomHUD is available.
         task.defer(function()
-            for _ = 1, 20 do
+            for _ = 1, 200 do
                 if MockEquippedSlots[unitID] ~= slot then
                     return
                 end
@@ -2246,6 +2352,8 @@ local function MountMockNativeSlot(unitID, slot)
         IDState = idState,
         AssetStates = assetStates,
         CostState = costState,
+        CostLabel = costLabel,
+        ResolvedCost = resolvedCost,
         NativeMounted = mountedInNativeSlot
     }
 
@@ -2322,8 +2430,9 @@ RefreshEquippedMockPresentation = function(unitID)
         return false
     end
 
-    -- Update the native Slot -> AssetDataProcessor -> Unit -> HotbarLayout
-    -- chain through its own local reactive values.
+    -- Update the native Slot -> AssetDataProcessor -> Unit viewport chain.
+    -- Mock slots intentionally use Textless display to avoid HotbarLayout's
+    -- UnitStatsProcessor require restriction.
     local view = MockSlotViews[unitID]
     if view then
         if view.DataState and type(view.DataState.set) == "function" then
@@ -2335,6 +2444,17 @@ RefreshEquippedMockPresentation = function(unitID)
             pcall(function()
                 view.AssetState:set(unitData.Asset)
             end)
+        end
+
+        local refreshedCost = ResolveMockPlacementCost(unitID, unitData, slot)
+        if refreshedCost then
+            if view.CostState and type(view.CostState.set) == "function" then
+                pcall(function() view.CostState:set(refreshedCost) end)
+            end
+            if view.Host then
+                view.CostLabel = CreateMockPlacementCostLabel(view.Host, refreshedCost)
+                view.ResolvedCost = refreshedCost
+            end
         end
     else
         local ok, err = pcall(MountMockNativeSlot, unitID, slot)
