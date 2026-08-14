@@ -6,6 +6,77 @@
     replacing the hardcoded trait database with the game's MockTraits module.
 ]]
 
+-- Rejoin auto-execution starts much earlier than a manual execute.
+-- On teleport boots, let Roblox finish constructing its own HUD/PlayerScripts
+-- before BLACKSIGIL imports Cascade/Fusion UI modules.
+local __BLACKSIGIL_ENV = (type(getgenv) == "function" and getgenv()) or _G
+local __BLACKSIGIL_TELEPORT_BOOT = __BLACKSIGIL_ENV.BLACKSIGIL_TELEPORT_BOOT == true
+__BLACKSIGIL_ENV.BLACKSIGIL_TELEPORT_BOOT = nil
+
+local function WaitForTeleportBootStability()
+    if not __BLACKSIGIL_TELEPORT_BOOT then
+        return
+    end
+
+    if not game:IsLoaded() then
+        pcall(function()
+            game.Loaded:Wait()
+        end)
+    end
+
+    local players = game:GetService("Players")
+    local replicatedStorage = game:GetService("ReplicatedStorage")
+
+    local player = players.LocalPlayer
+    local deadline = os.clock() + 35
+
+    while not player and os.clock() < deadline do
+        task.wait(0.1)
+        player = players.LocalPlayer
+    end
+
+    if not player then
+        return
+    end
+
+    local playerGui = player:WaitForChild("PlayerGui", 30)
+    if not playerGui then
+        return
+    end
+
+    replicatedStorage:WaitForChild("FusionPackage", 30)
+    replicatedStorage:WaitForChild("Nodes", 30)
+
+    -- BottomHUD can exist before its descendants are finished mounting.
+    -- Require a stable descendant count for ~2 seconds.
+    local stableTicks = 0
+    local lastCount = -1
+
+    while os.clock() < deadline and stableTicks < 8 do
+        local hud = playerGui:FindFirstChild("BottomHUD")
+        if hud then
+            local count = #hud:GetDescendants()
+            if count > 20 and count == lastCount then
+                stableTicks += 1
+            else
+                stableTicks = 0
+                lastCount = count
+            end
+        else
+            stableTicks = 0
+            lastCount = -1
+        end
+
+        task.wait(0.25)
+    end
+
+    -- Give PlayerScripts such as MountSharedHUD/MountTopBarCmdr one final frame
+    -- window before importing executor-side UI code.
+    task.wait(1)
+end
+
+WaitForTeleportBootStability()
+
 -- ================================
 -- CASCADE UI INITIALIZATION
 -- ================================
@@ -2198,6 +2269,42 @@ local function FindNativeHotbarSlotAnchor(slot)
     return best
 end
 
+local function WaitForNativeHotbarAnchor(slot, timeoutSeconds)
+    local deadline = os.clock() + (tonumber(timeoutSeconds) or 20)
+    local stableAnchor = nil
+    local stableTicks = 0
+
+    while os.clock() < deadline do
+        local anchor = FindNativeHotbarSlotAnchor(slot)
+
+        if anchor
+            and anchor.Parent
+            and anchor.Visible
+            and anchor.AbsoluteSize.X >= 80
+            and anchor.AbsoluteSize.Y >= 80 then
+
+            if anchor == stableAnchor then
+                stableTicks += 1
+            else
+                stableAnchor = anchor
+                stableTicks = 1
+            end
+
+            -- Require the exact same live GUI object for ~0.75 sec.
+            if stableTicks >= 4 then
+                return anchor
+            end
+        else
+            stableAnchor = nil
+            stableTicks = 0
+        end
+
+        task.wait(0.2)
+    end
+
+    return nil
+end
+
 local function GetFallbackSlotRect(slot)
     local maxSlots = GetMaxVisualSlots()
     local slotSize = 108
@@ -2661,12 +2768,72 @@ local function RestorePersistentMockData()
 
     local equipped = PersistedSnapshot.Equipped
     if type(equipped) == "table" then
-        task.defer(function()
-            task.wait(1)
+        task.spawn(function()
+            -- Do not restore native hotbar components while Roblox is still
+            -- rebuilding BottomHUD after teleport.
+            local restoreList = {}
             for unitID, slot in pairs(equipped) do
-                if MockUnitIDs[unitID] then
-                    pcall(VisualEquipMockUnit, unitID, tonumber(slot))
+                local numericSlot = tonumber(slot)
+                if MockUnitIDs[unitID] and numericSlot then
+                    table.insert(restoreList, {
+                        UnitID = unitID,
+                        Slot = numericSlot
+                    })
                 end
+            end
+
+            table.sort(restoreList, function(a, b)
+                return a.Slot < b.Slot
+            end)
+
+            for _, entry in ipairs(restoreList) do
+                local anchor = WaitForNativeHotbarAnchor(entry.Slot, 25)
+
+                if anchor then
+                    -- The anchor is confirmed stable immediately before equip,
+                    -- so MountMockNativeSlot should take the native path instead
+                    -- of creating a fallback overlay.
+                    local ok, equipResult, equipErr = pcall(
+                        VisualEquipMockUnit,
+                        entry.UnitID,
+                        entry.Slot
+                    )
+
+                    if not ok then
+                        warn(
+                            "[BLACKSIGIL] Rejoin equip restore failed:",
+                            entry.UnitID,
+                            equipResult
+                        )
+                    elseif equipResult ~= true then
+                        warn(
+                            "[BLACKSIGIL] Rejoin equip restore skipped:",
+                            entry.UnitID,
+                            equipErr
+                        )
+                    else
+                        SafeLog(
+                            "Rejoin Restore",
+                            string.format(
+                                "%s -> native slot %d",
+                                entry.UnitID,
+                                entry.Slot
+                            )
+                        )
+                    end
+                else
+                    -- Inventory remains restored. We deliberately do not create
+                    -- a fallback during teleport startup because that was the
+                    -- source of invisible/spammed hotbar state.
+                    warn(
+                        "[BLACKSIGIL] Rejoin hotbar anchor timeout; inventory kept:",
+                        entry.UnitID,
+                        "slot",
+                        entry.Slot
+                    )
+                end
+
+                task.wait(0.15)
             end
         end)
     end
@@ -2982,6 +3149,8 @@ local function QueueBlackSigilForTeleport()
     end
 
     local payload = [[
+local env = (type(getgenv) == "function" and getgenv()) or _G
+env.BLACKSIGIL_TELEPORT_BOOT = true
 loadstring(game:HttpGet("https://raw.githubusercontent.com/szty-v/chujcieto/refs/heads/main/ez.lua"))()
 ]]
 
@@ -3070,7 +3239,9 @@ local function QueueVisualHudRefresh()
 end
 
 PlayerGui.ChildAdded:Connect(function(child)
-    if child.Name == "BottomHUD" or child.Name == "Summon" or child.Name == "TraitReroll" then
+    if child.Name == "Summon" or child.Name == "TraitReroll" then
+        QueueVisualHudRefresh()
+    elseif child.Name == "BottomHUD" and not __BLACKSIGIL_TELEPORT_BOOT then
         QueueVisualHudRefresh()
     end
 end)
@@ -3080,7 +3251,10 @@ PlayerGui.DescendantAdded:Connect(function(descendant)
     while root and root.Parent ~= PlayerGui do
         root = root.Parent
     end
-    if root and (root.Name == "BottomHUD" or root.Name == "Summon" or root.Name == "TraitReroll") then
+
+    if root and (root.Name == "Summon" or root.Name == "TraitReroll") then
+        QueueVisualHudRefresh()
+    elseif root and root.Name == "BottomHUD" and not __BLACKSIGIL_TELEPORT_BOOT then
         QueueVisualHudRefresh()
     end
 end)
@@ -3095,7 +3269,7 @@ QueuePersistentSave()
 SafeLog("Loaded", string.format("Trait engine ready with %d live MockTraits; native banner summon engine ready", #TraitDatabase))
 SafeLog("Equip", "Visual mock equip/unequip enabled")
 SafeLog("Currency", "Native client affordability mirrors enabled")
-SafeLog("Hotbar", "v15 native visuals; single fallback mount; native TraitProcessor reroll UI")
+SafeLog("Hotbar", "v15 native visuals; rejoin waits for stable native anchors")
 SafeLog("Pity", "Summon pity 50/400/10000; trait pity Draconic 300 / Forsaken 500 / Primordial 750 / Unbound 1500")
 SafeLog("State", "Using leaf ItemData Values + PlayerData.HotbarData backing state")
 
