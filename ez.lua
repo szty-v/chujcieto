@@ -561,6 +561,9 @@ end
 
 
 
+local JsonSafeCopy
+
+
 -- ================================
 -- LOCAL CLIENT CURRENCY MIRROR
 -- Keeps native BuyButton validation in sync with BLACKSIGIL's visual sliders.
@@ -1817,7 +1820,7 @@ local MockSlotUnits = {}       -- [slotNumber] = unitID
 local MockSlotViews = {}       -- [unitID] = { Scope, Instance, AnchorConnections }
 local MockOverlayRoot = nil
 
-local function JsonSafeCopy(value, depth)
+JsonSafeCopy = function(value, depth)
     depth = depth or 0
     if depth > 12 then
         return nil
@@ -1874,7 +1877,19 @@ SavePersistentState = function()
         return false
     end
 
+    -- Start from the last successfully loaded/saved mock table. During rejoin,
+    -- Dependencies.UnitData can briefly be empty while the native state mounts;
+    -- never let that transient state erase the persistent inventory.
     local mockUnits = {}
+    if type(PersistedSnapshot) == "table"
+        and type(PersistedSnapshot.MockUnits) == "table" then
+        for unitID, unitData in pairs(PersistedSnapshot.MockUnits) do
+            if type(unitID) == "string" and type(unitData) == "table" then
+                mockUnits[unitID] = JsonSafeCopy(unitData)
+            end
+        end
+    end
+
     local units = GetNativeUnitDataSnapshot()
     if type(units) == "table" then
         for unitID, unitData in pairs(units) do
@@ -1885,11 +1900,14 @@ SavePersistentState = function()
     end
 
     local snapshot = {
-        Version = 15,
+        Version = 23,
         VisualState = JsonSafeCopy(VisualState),
         MockUnits = mockUnits,
         Equipped = JsonSafeCopy(MockEquippedSlots)
     }
+
+    -- Keep the in-memory copy synchronized with exactly what is written.
+    PersistedSnapshot = snapshot
 
     local okEncode, encoded = pcall(HttpService.JSONEncode, HttpService, snapshot)
     if not okEncode then
@@ -2510,6 +2528,9 @@ local function RestorePersistentMockData()
             warn("[BLACKSIGIL] Persistent UnitData restore warning:", unitRestoreErr)
         end
         SafeLog("Persistence", string.format("restored %d mock units", restored))
+        if SavePersistentState then
+            pcall(SavePersistentState)
+        end
     end
 
     local equipped = PersistedSnapshot.Equipped
@@ -2564,6 +2585,13 @@ local function DeleteAllMockData()
     table.clear(MockUnitIDs)
     table.clear(MockEquippedSlots)
     table.clear(MockSlotUnits)
+
+    PersistedSnapshot = {
+        Version = 23,
+        VisualState = {},
+        MockUnits = {},
+        Equipped = {}
+    }
 
     VisualState.Gems = 50000
     VisualState.Gold = 100000
