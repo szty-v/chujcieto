@@ -741,26 +741,16 @@ local function ApplyTraitToNativeLocalState(unitID, rolledTrait)
     if type(rolledTrait) ~= "table" then
         return false, "invalid trait"
     end
-    if not PlayerDataState or type(PlayerDataState.set) ~= "function" then
-        return false, "PlayerData state has no :set()"
-    end
 
-    local okPeek, currentRoot = pcall(Fusion.peek, PlayerDataState)
-    if not okPeek or type(currentRoot) ~= "table" then
-        return false, "Fusion.peek(PlayerData) failed"
-    end
-
-    local currentUnits = currentRoot.UnitData
-    if type(currentUnits) ~= "table" then
-        return false, "PlayerData.UnitData missing"
-    end
-
-    local currentUnit = currentUnits[unitID]
+    -- Only mutate Dependencies.UnitData. Replacing the whole PlayerData root
+    -- forces unrelated Fusion HUD/event graphs to recompute and can trigger
+    -- RobloxScript-only requires from the executor callback thread.
+    local currentUnits = GetNativeUnitDataSnapshot()
+    local currentUnit = type(currentUnits) == "table" and currentUnits[unitID] or nil
     if type(currentUnit) ~= "table" then
         return false, "unit not found: " .. tostring(unitID)
     end
 
-    local newRoot = CloneMap(currentRoot)
     local newUnits = CloneMap(currentUnits)
     local newUnit = CloneMap(currentUnit)
     local newHistory = CloneArray(currentUnit.TraitHistory)
@@ -777,20 +767,12 @@ local function ApplyTraitToNativeLocalState(unitID, rolledTrait)
         table.remove(newHistory)
     end
     newUnit.TraitHistory = newHistory
-
     newUnits[unitID] = newUnit
-        MockUnitIDs[unitID] = true
-    newRoot.UnitData = newUnits
+    MockUnitIDs[unitID] = true
 
-    local okSet, setErr = pcall(function()
-        PlayerDataState:set(newRoot)
-        local unitSyncOk, unitSyncErr = SetNativeUnitDataState(newUnits)
-        if not unitSyncOk then
-            warn("[BLACKSIGIL] UnitData sync warning:", unitSyncErr)
-        end
-    end)
+    local okSet, setErr = SetNativeUnitDataState(newUnits)
     if not okSet then
-        return false, "PlayerData:set failed: " .. tostring(setErr)
+        return false, "UnitData:set failed: " .. tostring(setErr)
     end
 
     SafeLog("Native Trait", string.format("%s: %s -> %s (roll %d)", unitID, tostring(oldTrait), tostring(traitKey), newUnit.TraitRollAmount))
@@ -1994,12 +1976,13 @@ local function GetMockOverlayRoot()
         return MockOverlayRoot
     end
 
-    local parent = PlayerGui:FindFirstChild("BottomHUD")
-    local screenGui
-
-    if parent and parent:IsA("ScreenGui") then
-        screenGui = parent
-    else
+    -- Never parent mock Fusion content into BottomHUD. BottomHUD is rebuilt by
+    -- the game and destroying its descendants while Fusion owns UIScale objects
+    -- can produce the locked-Parent callback error. Keep a permanent, separate
+    -- BLACKSIGIL ScreenGui and only mirror the native slot's screen rectangle.
+    local screenGui = PlayerGui:FindFirstChild("BLACKSIGIL_MockHotbar")
+    if not screenGui or not screenGui:IsA("ScreenGui") then
+        if screenGui then pcall(function() screenGui:Destroy() end) end
         screenGui = Instance.new("ScreenGui")
         screenGui.Name = "BLACKSIGIL_MockHotbar"
         screenGui.IgnoreGuiInset = true
@@ -2093,34 +2076,33 @@ local function CleanupMockNativeSlot(unitID)
 end
 
 local function CreateMockSlotHost(anchor, slot)
-    if anchor and anchor.Parent then
-        local host = Instance.new("Frame")
-        host.Name = "BLACKSIGIL_MockNativeSlot_" .. tostring(slot)
-        host.BackgroundTransparency = 1
-        host.BorderSizePixel = 0
-        host.Size = UDim2.fromScale(1, 1)
-        host.Position = UDim2.fromScale(0.5, 0.5)
-        host.AnchorPoint = Vector2.new(0.5, 0.5)
-        host.ZIndex = math.max(100, anchor.ZIndex + 50)
-        host.ClipsDescendants = false
-        host.Parent = anchor
-        return host, true
-    end
-
-    -- Fallback only if the native hotbar has not mounted yet.
     local root = GetMockOverlayRoot()
-    local pos, size = GetFallbackSlotRect(slot)
     local host = Instance.new("Frame")
-    host.Name = "BLACKSIGIL_MockNativeSlotFallback_" .. tostring(slot)
+    host.Name = "BLACKSIGIL_MockOverlaySlot_" .. tostring(slot)
     host.BackgroundTransparency = 1
     host.BorderSizePixel = 0
-    host.Size = UDim2.fromOffset(size.X, size.Y)
-    host.Position = UDim2.fromOffset(pos.X, pos.Y)
     host.AnchorPoint = Vector2.zero
     host.ZIndex = 100
     host.ClipsDescendants = false
     host.Parent = root
-    return host, false
+
+    local function syncRect(target)
+        if target and target.Parent then
+            local pos = target.AbsolutePosition
+            local size = target.AbsoluteSize
+            host.Position = UDim2.fromOffset(pos.X, pos.Y)
+            host.Size = UDim2.fromOffset(size.X, size.Y)
+            return true
+        end
+
+        local pos, size = GetFallbackSlotRect(slot)
+        host.Position = UDim2.fromOffset(pos.X, pos.Y)
+        host.Size = UDim2.fromOffset(size.X, size.Y)
+        return false
+    end
+
+    local nativeFound = syncRect(anchor)
+    return host, nativeFound, syncRect
 end
 
 local function ResolveMockPlacementCost(unitID, unitData, slot)
@@ -2236,7 +2218,7 @@ local function MountMockNativeSlot(unitID, slot)
     end
 
     local anchor = FindNativeHotbarSlotAnchor(slot)
-    local host, mountedInNativeSlot = CreateMockSlotHost(anchor, slot)
+    local host, mountedInNativeSlot, syncHostRect = CreateMockSlotHost(anchor, slot)
 
     local scope = Fusion.scoped(Fusion, NativeState, {
         Slot = NativeSlotComponent,
@@ -2306,39 +2288,30 @@ local function MountMockNativeSlot(unitID, slot)
 
     local connections = {}
 
-    -- If BottomHUD rebuilds the empty slot, remount into the new native slot.
-    if mountedInNativeSlot and anchor then
-        table.insert(connections, anchor.AncestryChanged:Connect(function(_, parent)
-            if parent == nil and MockEquippedSlots[unitID] == slot then
-                task.defer(function()
-                    task.wait()
-                    if MockEquippedSlots[unitID] == slot then
-                        local ok, err = pcall(MountMockNativeSlot, unitID, slot)
-                        if not ok then
-                            warn("[BLACKSIGIL] Native hotbar remount failed:", err)
-                        end
-                    end
-                end)
+    -- Track the native slot rectangle, but NEVER remount/reparent the Fusion
+    -- component. When BottomHUD rebuilds, just locate the replacement anchor and
+    -- move this stable overlay host to the new screen rectangle.
+    task.defer(function()
+        local currentAnchor = anchor
+        while MockEquippedSlots[unitID] == slot and host.Parent do
+            task.wait(0.25)
+
+            if not currentAnchor or not currentAnchor.Parent then
+                currentAnchor = FindNativeHotbarSlotAnchor(slot)
             end
-        end))
-    else
-        -- Promote fallback into the real slot once BottomHUD is available.
-        task.defer(function()
-            for _ = 1, 200 do
-                if MockEquippedSlots[unitID] ~= slot then
-                    return
-                end
-                task.wait(0.1)
-                if FindNativeHotbarSlotAnchor(slot) then
-                    local ok, err = pcall(MountMockNativeSlot, unitID, slot)
-                    if not ok then
-                        warn("[BLACKSIGIL] Native hotbar promotion failed:", err)
-                    end
-                    return
-                end
+
+            local foundNative = false
+            if syncHostRect then
+                foundNative = syncHostRect(currentAnchor)
             end
-        end)
-    end
+
+            local view = MockSlotViews[unitID]
+            if view then
+                view.Anchor = currentAnchor
+                view.NativeMounted = foundNative
+            end
+        end
+    end)
 
     MockSlotViews[unitID] = {
         Scope = scope,
@@ -2363,7 +2336,7 @@ local function MountMockNativeSlot(unitID, slot)
             "%s -> slot %d (%s)",
             unitID,
             slot,
-            mountedInNativeSlot and "native anchor" or "fallback"
+            mountedInNativeSlot and "aligned overlay" or "fallback overlay"
         )
     )
 
@@ -2554,12 +2527,11 @@ local function RestorePersistentMockData()
         return
     end
 
-    local okRoot, currentRoot = pcall(Fusion.peek, PlayerDataState)
-    if not okRoot or type(currentRoot) ~= "table" then
-        return
+    local currentUnits = GetNativeUnitDataSnapshot()
+    if type(currentUnits) ~= "table" then
+        currentUnits = {}
     end
 
-    local currentUnits = type(currentRoot.UnitData) == "table" and currentRoot.UnitData or {}
     local newUnits = CloneMap(currentUnits)
     local restored = 0
 
@@ -2574,27 +2546,30 @@ local function RestorePersistentMockData()
     end
 
     if restored > 0 then
-        local newRoot = CloneMap(currentRoot)
-        newRoot.UnitData = newUnits
-        pcall(function() PlayerDataState:set(newRoot) end)
-        pcall(function() SetNativeUnitDataState(newUnits) end)
-        SafeLog("Persistence", string.format("restored %d mock units", restored))
+        local okSet, setErr = SetNativeUnitDataState(newUnits)
+        if not okSet then
+            warn("[BLACKSIGIL] Persistence UnitData restore warning:", setErr)
+        else
+            SafeLog("Persistence", string.format("restored %d mock units", restored))
+        end
     end
 
     local equipped = PersistedSnapshot.Equipped
     if type(equipped) == "table" then
         task.defer(function()
-            -- Rejoin auto-exec can run before BottomHUD and all Fusion modules
-            -- have finished their first client initialization. Wait for the
-            -- native hotbar to exist before restoring mock native slots.
-            local deadline = os.clock() + 12
+            -- Wait for BottomHUD once, then equip each saved mock exactly once.
+            -- The overlay itself tracks future HUD rebuilds by position only.
+            local deadline = os.clock() + 15
             repeat
                 task.wait(0.25)
             until FindNativeHotbarSlotAnchor(1) or os.clock() >= deadline
 
             for unitID, slot in pairs(equipped) do
-                if MockUnitIDs[unitID] then
-                    pcall(VisualEquipMockUnit, unitID, tonumber(slot))
+                if MockUnitIDs[unitID] and not MockEquippedSlots[unitID] then
+                    local okEquip, err = VisualEquipMockUnit(unitID, tonumber(slot))
+                    if not okEquip then
+                        warn("[BLACKSIGIL] Persistent equip restore warning:", err)
+                    end
                 end
             end
         end)
@@ -2631,9 +2606,6 @@ local function DeleteAllMockData()
                 newUnits[unitID] = nil
             end
         end
-        local newRoot = CloneMap(currentRoot)
-        newRoot.UnitData = newUnits
-        pcall(function() PlayerDataState:set(newRoot) end)
         pcall(function() SetNativeUnitDataState(newUnits) end)
     end
 
@@ -3017,7 +2989,7 @@ QueuePersistentSave()
 SafeLog("Loaded", string.format("Trait engine ready with %d live MockTraits; native banner summon engine ready", #TraitDatabase))
 SafeLog("Equip", "Visual mock equip/unequip enabled")
 SafeLog("Currency", "Native client affordability mirrors enabled")
-SafeLog("Hotbar", "Native Unit -> HotbarLayout overlay enabled")
+SafeLog("Hotbar", "Native Unit -> stable aligned overlay enabled")
 SafeLog("Pity", "Summon pity 50/400/10000; trait pity Draconic 300 / Forsaken 500 / Primordial 750 / Unbound 1500")
 SafeLog("State", "Using leaf ItemData Values + PlayerData.HotbarData backing state")
 
