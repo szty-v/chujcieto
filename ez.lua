@@ -44,8 +44,10 @@ local FusionPackage = ReplicatedStorage:WaitForChild("FusionPackage")
 local Dependencies = require(FusionPackage:WaitForChild("Dependencies"))
 local Fusion = require(FusionPackage:WaitForChild("Fusion"))
 local NativeState = require(FusionPackage:WaitForChild("State"))
-local NativeSlotComponent = require(FusionPackage.Components.Base.Slot)
 local NativeAssetDataProcessor = require(FusionPackage.Components.Processors.Asset.AssetData)
+local NativeUnitProcessor = require(FusionPackage.Components.Processors.Asset.Unit)
+local NativeModelDisplay = require(FusionPackage.Components.Base.ModelDisplay)
+local NativeTraitIcon = require(FusionPackage.Components.Icons.Trait)
 local NodesModule = require(ReplicatedStorage:WaitForChild("Nodes"))
 local OnEvent = Fusion.OnEvent
 local PlayerDataState = Dependencies.PlayerData
@@ -1985,7 +1987,7 @@ local function GetMockOverlayRoot()
         if screenGui then pcall(function() screenGui:Destroy() end) end
         screenGui = Instance.new("ScreenGui")
         screenGui.Name = "BLACKSIGIL_MockHotbar"
-        screenGui.IgnoreGuiInset = true
+        screenGui.IgnoreGuiInset = false
         screenGui.ResetOnSpawn = false
         screenGui.DisplayOrder = 100
         screenGui.Parent = PlayerGui
@@ -2220,16 +2222,17 @@ local function MountMockNativeSlot(unitID, slot)
     local anchor = FindNativeHotbarSlotAnchor(slot)
     local host, mountedInNativeSlot, syncHostRect = CreateMockSlotHost(anchor, slot)
 
+    -- Do not instantiate Base.Slot/ButtonBase here. Its hover/click plumbing
+    -- calls Actions.PlaySound -> GetSettingValue, which can require modules from
+    -- a RobloxScript-only context and error when created by an executor thread.
+    -- Instead compose only the safe visual pieces used by Unit slots.
     local scope = Fusion.scoped(Fusion, NativeState, {
-        Slot = NativeSlotComponent,
-        AssetDataProcessor = NativeAssetDataProcessor
+        AssetDataProcessor = NativeAssetDataProcessor,
+        UnitProcessor = NativeUnitProcessor,
+        ModelDisplay = NativeModelDisplay,
+        TraitIcon = NativeTraitIcon
     })
 
-    -- Build the exact same AssetStates object that the real Hotbar builds.
-    -- Passing raw ID/Asset/Data into Base.Slot caused Base.Slot to invoke its
-    -- processor from inside a later Computed evaluation; after a teleport that
-    -- can hit Roblox's "cannot require a non-RobloxScript module" restriction.
-    -- Prebuilding AssetStates here keeps require() out of that reactive callback.
     local dataState = scope:Value(CloneMap(unitData))
     local assetState = scope:Value(unitData.Asset)
     local idState = scope:Value(unitID)
@@ -2239,72 +2242,117 @@ local function MountMockNativeSlot(unitID, slot)
         Data = dataState,
         AssetType = "Unit"
     })
-
-    -- IMPORTANT: do not use Unit.HotbarLayout for mock slots.
-    -- HotbarLayout creates UnitStatsProcessor which eventually calls
-    -- Actions.GetEquipmentData/GetCalculatedStatsFromData. Those native actions
-    -- attempt a require from a RobloxScript-only context and throw when the mock
-    -- component was mounted by an executor thread.
-    --
-    -- We resolve the displayed placement cost once, outside any Fusion Computed,
-    -- and draw it ourselves below the native Unit viewport.
-    local resolvedCost = ResolveMockPlacementCost(unitID, unitData, slot)
-    local costState = scope:Value(resolvedCost)
-
-    local instance = scope:Slot({
-        Parent = host,
-        Size = UDim2.fromScale(1, 1),
-        Position = UDim2.fromScale(0.5, 0.5),
-        AnchorPoint = Vector2.new(0.5, 0.5),
-
-        -- Textless keeps the native Slot -> Unit viewport/trait presentation,
-        -- but deliberately skips Unit.HotbarLayout and its unsafe UnitStats path.
-        DisplayType = "Textless",
-        AssetType = "Unit",
-        AssetStates = assetStates,
-        Cost = costState,
-        SlotNumber = slot,
-
-        -- Match the real Hotbar slot presentation as closely as possible.
-        HideIcons = true,
-        ShowObtainments = false,
-        Disabled = false,
-        Selected = false,
-        LayoutOrder = slot,
-        ZIndex = 100,
-
-        [OnEvent("Activated")] = function()
-            SafeLog("Mock Hotbar", string.format("slot %d selected (%s)", slot, unitID))
-        end,
-
-        [OnEvent("MouseButton2Click")] = function()
-            task.defer(function()
-                VisualUnequipMockUnit(unitID)
-            end)
-        end
+    local unitStates = scope:UnitProcessor({
+        AssetStates = assetStates
     })
 
+    local background = Instance.new("Frame")
+    background.Name = "BLACKSIGIL_Visual"
+    background.BackgroundColor3 = Color3.fromRGB(24, 24, 28)
+    background.BackgroundTransparency = 0.05
+    background.BorderSizePixel = 0
+    background.Size = UDim2.fromScale(1, 1)
+    background.ZIndex = 101
+    background.Parent = host
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 9)
+    corner.Parent = background
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Thickness = 2
+    stroke.Transparency = 0.15
+    stroke.Parent = background
+
+    -- Native model viewport only; this path does not use ButtonBase or
+    -- HotbarLayout/UnitStatsProcessor.
+    local viewport = scope:ModelDisplay({
+        Parent = background,
+        HasShadow = false,
+        ZIndex = 104,
+        Size = UDim2.fromScale(0.96, 0.92),
+        Position = UDim2.fromScale(0.5, 0.94),
+        AnchorPoint = Vector2.new(0.5, 1),
+        Model = unitStates.Model,
+        ModelOffset = unitStates.ViewportOffset,
+        CameraOffset = Vector3.new(0, 1.45, -3.75),
+        Accessory = unitStates.Accessory,
+        GradientTransparency = NumberSequence.new(0)
+    })
+
+    local levelLabel = Instance.new("TextLabel")
+    levelLabel.Name = "BLACKSIGIL_Level"
+    levelLabel.BackgroundColor3 = Color3.fromRGB(18, 18, 20)
+    levelLabel.BackgroundTransparency = 0.05
+    levelLabel.BorderSizePixel = 0
+    levelLabel.Position = UDim2.fromOffset(4, 3)
+    levelLabel.Size = UDim2.fromOffset(48, 20)
+    levelLabel.ZIndex = 110
+    levelLabel.Font = Enum.Font.GothamBold
+    levelLabel.TextColor3 = Color3.new(1, 1, 1)
+    levelLabel.TextStrokeTransparency = 0.35
+    levelLabel.TextScaled = true
+    levelLabel.Parent = host
+    local levelCorner = Instance.new("UICorner")
+    levelCorner.CornerRadius = UDim.new(0, 6)
+    levelCorner.Parent = levelLabel
+
+    local function refreshLevel()
+        local current = GetCurrentMockUnitData(unitID) or unitData
+        local level = tonumber(current.Level or current.Lvl or 1) or 1
+        levelLabel.Text = "Lvl " .. tostring(math.floor(level))
+    end
+    refreshLevel()
+
+    local traitHost = Instance.new("Frame")
+    traitHost.Name = "BLACKSIGIL_Trait"
+    traitHost.BackgroundTransparency = 1
+    traitHost.AnchorPoint = Vector2.new(1, 0)
+    traitHost.Position = UDim2.new(1, -5, 0, 5)
+    traitHost.Size = UDim2.fromOffset(28, 28)
+    traitHost.ZIndex = 115
+    traitHost.Parent = host
+
+    local traitIcon = scope:TraitIcon({
+        Parent = traitHost,
+        Animated = false,
+        HasGlow = false,
+        Size = UDim2.fromScale(1, 1),
+        Trait = unitStates.Trait,
+        Visible = unitStates.HasTrait
+    })
+
+    local resolvedCost = ResolveMockPlacementCost(unitID, unitData, slot)
     local costLabel = CreateMockPlacementCostLabel(host, resolvedCost)
 
-    local connections = {}
+    -- Plain transparent click catcher: no Fusion ButtonBase, no PlaySound.
+    local click = Instance.new("ImageButton")
+    click.Name = "BLACKSIGIL_Click"
+    click.BackgroundTransparency = 1
+    click.ImageTransparency = 1
+    click.Size = UDim2.fromScale(1, 1)
+    click.ZIndex = 200
+    click.Parent = host
+    click.MouseButton1Click:Connect(function()
+        SafeLog("Mock Hotbar", string.format("slot %d selected (%s)", slot, unitID))
+    end)
+    click.MouseButton2Click:Connect(function()
+        task.defer(function()
+            VisualUnequipMockUnit(unitID)
+        end)
+    end)
 
-    -- Track the native slot rectangle, but NEVER remount/reparent the Fusion
-    -- component. When BottomHUD rebuilds, just locate the replacement anchor and
-    -- move this stable overlay host to the new screen rectangle.
     task.defer(function()
         local currentAnchor = anchor
         while MockEquippedSlots[unitID] == slot and host.Parent do
-            task.wait(0.25)
-
+            task.wait(0.2)
             if not currentAnchor or not currentAnchor.Parent then
                 currentAnchor = FindNativeHotbarSlotAnchor(slot)
             end
-
             local foundNative = false
             if syncHostRect then
                 foundNative = syncHostRect(currentAnchor)
             end
-
             local view = MockSlotViews[unitID]
             if view then
                 view.Anchor = currentAnchor
@@ -2315,16 +2363,16 @@ local function MountMockNativeSlot(unitID, slot)
 
     MockSlotViews[unitID] = {
         Scope = scope,
-        Instance = instance,
+        Instance = viewport,
         Host = host,
         Anchor = anchor,
-        Connections = connections,
+        Connections = {},
         Slot = slot,
         DataState = dataState,
         AssetState = assetState,
         IDState = idState,
         AssetStates = assetStates,
-        CostState = costState,
+        UnitStates = unitStates,
         CostLabel = costLabel,
         ResolvedCost = resolvedCost,
         NativeMounted = mountedInNativeSlot
@@ -2336,7 +2384,7 @@ local function MountMockNativeSlot(unitID, slot)
             "%s -> slot %d (%s)",
             unitID,
             slot,
-            mountedInNativeSlot and "aligned overlay" or "fallback overlay"
+            mountedInNativeSlot and "aligned visual" or "fallback visual"
         )
     )
 
@@ -2989,7 +3037,7 @@ QueuePersistentSave()
 SafeLog("Loaded", string.format("Trait engine ready with %d live MockTraits; native banner summon engine ready", #TraitDatabase))
 SafeLog("Equip", "Visual mock equip/unequip enabled")
 SafeLog("Currency", "Native client affordability mirrors enabled")
-SafeLog("Hotbar", "Native Unit -> stable aligned overlay enabled")
+SafeLog("Hotbar", "Safe visual overlay (no ButtonBase/HotbarLayout) enabled")
 SafeLog("Pity", "Summon pity 50/400/10000; trait pity Draconic 300 / Forsaken 500 / Primordial 750 / Unbound 1500")
 SafeLog("State", "Using leaf ItemData Values + PlayerData.HotbarData backing state")
 
