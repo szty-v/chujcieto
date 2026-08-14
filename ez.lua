@@ -2122,6 +2122,28 @@ local function CreateMockSlotHost(anchor, slot)
     return host, false
 end
 
+local function ResolveMockHotbarCost(unitData)
+    if type(unitData) ~= "table" then
+        return 0
+    end
+
+    for _, key in ipairs({
+        "PlacementCost",
+        "Cost",
+        "DeployCost",
+        "BaseCost"
+    }) do
+        local value = tonumber(unitData[key])
+        if value then
+            return math.max(0, value)
+        end
+    end
+
+    -- Keep this purely local. Supplying a concrete Cost prevents the native
+    -- hotbar renderer from falling back into calculated equipment stats.
+    return 0
+end
+
 local function MountMockNativeSlot(unitID, slot)
     CleanupMockNativeSlot(unitID)
 
@@ -2154,6 +2176,9 @@ local function MountMockNativeSlot(unitID, slot)
         Asset = assetState,
         Data = dataState,
         SlotNumber = slot,
+
+        -- Match the real Hotbar contract: always pass an explicit Cost.
+        Cost = ResolveMockHotbarCost(unitData),
 
         -- Match the real Hotbar slot presentation as closely as possible.
         HideIcons = true,
@@ -2863,7 +2888,7 @@ QueuePersistentSave()
 SafeLog("Loaded", string.format("Trait engine ready with %d live MockTraits; native banner summon engine ready", #TraitDatabase))
 SafeLog("Equip", "Visual mock equip/unequip enabled")
 SafeLog("Currency", "Native client affordability mirrors enabled")
-SafeLog("Hotbar", "Native Unit -> HotbarLayout overlay enabled")
+SafeLog("Hotbar", "Native Unit -> HotbarLayout overlay enabled (explicit local Cost)")
 SafeLog("Pity", "Summon pity 50/400/10000; trait pity Draconic 300 / Forsaken 500 / Primordial 750 / Unbound 1500")
 SafeLog("State", "Using leaf ItemData Values + PlayerData.HotbarData backing state")
 
