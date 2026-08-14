@@ -1,5 +1,3 @@
--- BLACKSIGIL v15 self-queue bootstrap
-local __BLACKSIGIL_SOURCE = [====[
 --[[
     BLACKSIGIL - Anime Vanguards (Cascade UI Complete Edition)
     Trait + Banner Visual Engine - Native Fusion Edition
@@ -41,11 +39,6 @@ local LocalPlayer = Players.LocalPlayer
 local BLACKSIGIL_RAW_URL = "https://raw.githubusercontent.com/szty-v/chujcieto/refs/heads/main/ez.lua"
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
--- Restore normal BLACKSIGIL rejoin after execution/rejoin.
-pcall(function()
-    if type(setfpscap) == "function" then
-end
-end)
 
 local FusionPackage = ReplicatedStorage:WaitForChild("FusionPackage")
 local Dependencies = require(FusionPackage:WaitForChild("Dependencies"))
@@ -2744,18 +2737,6 @@ actionStack:Button({
     end
 })
 
-local function GetQueueOnTeleport()
-    if type(queue_on_teleport) == "function" then
-        return queue_on_teleport
-    end
-    if type(syn) == "table" and type(syn.queue_on_teleport) == "function" then
-        return syn.queue_on_teleport
-    end
-    if type(fluxus) == "table" and type(fluxus.queue_on_teleport) == "function" then
-        return fluxus.queue_on_teleport
-    end
-    return nil
-end
 
 local function QueueBlackSigilForTeleport()
     local queueFn =
@@ -2768,17 +2749,9 @@ local function QueueBlackSigilForTeleport()
         return false
     end
 
-    if type(BLACKSIGIL_RAW_URL) ~= "string"
-        or BLACKSIGIL_RAW_URL == ""
-        or BLACKSIGIL_RAW_URL == "PASTE_RAW_FILE_URL_HERE" then
-
-        warn("[BLACKSIGIL] Set BLACKSIGIL_RAW_URL before using Rejoin auto-execute")
-        return false
-    end
-
-    local payload = string.format([[
-loadstring(game:HttpGet(%q))()
-]], BLACKSIGIL_RAW_URL)
+    local payload = [[
+loadstring(game:HttpGet("https://raw.githubusercontent.com/szty-v/chujcieto/refs/heads/main/ez.lua"))()
+]]
 
     local ok, err = pcall(function()
         queueFn(payload)
@@ -2792,28 +2765,6 @@ loadstring(game:HttpGet(%q))()
     return true
 end
 
-local function QueueBLACKSIGILForRejoin()
-    local env = type(getgenv) == "function" and getgenv() or _G
-    local source = (env and env.BLACKSIGIL_SELF_SOURCE) or _G.BLACKSIGIL_SELF_SOURCE
-    local queueFn = GetQueueOnTeleport()
-
-    if type(queueFn) ~= "function" or type(source) ~= "string" or source == "" then
-        return false, "queue_on_teleport or self source unavailable"
-    end
-
-    local quoted = string.format("%q", source)
-    local payload = table.concat({
-        "pcall(function() if type(setfpscap)=='function' then setfpscap(240) end end)",
-        "local __BLACKSIGIL_SRC=" .. quoted,
-        "pcall(function() if type(getgenv)=='function' then getgenv().BLACKSIGIL_SELF_SOURCE=__BLACKSIGIL_SRC end end)",
-        "_G.BLACKSIGIL_SELF_SOURCE=__BLACKSIGIL_SRC",
-        "loadstring(__BLACKSIGIL_SRC)()"
-    }, "\\n")
-
-    local ok, err = pcall(queueFn, payload)
-    return ok, err
-end
-
 actionStack:Button({
     Label = "Rejoin Server",
     State = "Destructive",
@@ -2823,15 +2774,10 @@ actionStack:Button({
             pcall(SavePersistentState)
         end
 
-        local queued, queueErr = QueueBLACKSIGILForRejoin()
+        local queued = QueueBlackSigilForTeleport()
         if not queued then
-            warn("[BLACKSIGIL] Auto-execute queue warning:", queueErr)
+            warn("[BLACKSIGIL] Auto-execute could not be queued")
         end
-
-        pcall(function()
-            if type(setfpscap) == "function" then
-end
-        end)
 
         task.wait(0.15)
         TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
@@ -2925,14 +2871,3 @@ print(string.format(
     "BLACKSIGIL - Anime Vanguards (Cascade Edition) initialized with %d live traits and banner summon rollback.",
     #TraitDatabase
 ))
-
-]====]
-
-pcall(function()
-    if type(getgenv) == "function" then
-        getgenv().BLACKSIGIL_SELF_SOURCE = __BLACKSIGIL_SOURCE
-    end
-end)
-_G.BLACKSIGIL_SELF_SOURCE = __BLACKSIGIL_SOURCE
-
-return loadstring(__BLACKSIGIL_SOURCE)()
