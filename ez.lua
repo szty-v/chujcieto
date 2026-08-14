@@ -733,6 +733,73 @@ local function GetNativeUnitDataSnapshot()
     return {}
 end
 
+local function GetNativeUnitLeaf(unitID)
+    local container = UnitDataState
+
+    if type(UnitDataState) == "table" then
+        local okPeek, resolved = pcall(Fusion.peek, UnitDataState)
+        if okPeek and type(resolved) == "table" then
+            container = resolved
+        end
+    end
+
+    if type(container) == "table" then
+        return container[unitID]
+    end
+
+    return nil
+end
+
+local function ReadNativeUnitRecord(unitID)
+    local leaf = GetNativeUnitLeaf(unitID)
+
+    if type(leaf) == "table" and type(leaf.set) == "function" then
+        local ok, value = pcall(Fusion.peek, leaf)
+        if ok and type(value) == "table" then
+            return value, leaf
+        end
+    elseif type(leaf) == "table" then
+        return leaf, nil
+    end
+
+    local okRoot, root = pcall(Fusion.peek, PlayerDataState)
+    if okRoot and type(root) == "table" and type(root.UnitData) == "table" then
+        local value = root.UnitData[unitID]
+        if type(value) == "table" then
+            return value, nil
+        end
+    end
+
+    return nil, nil
+end
+
+local function WriteNativeUnitRecord(unitID, newUnit)
+    if type(newUnit) ~= "table" then
+        return false, "invalid unit record"
+    end
+
+    local _, leaf = ReadNativeUnitRecord(unitID)
+    if leaf and type(leaf.set) == "function" then
+        local ok, err = pcall(function()
+            leaf:set(newUnit)
+        end)
+        if ok then
+            return true
+        end
+        return false, tostring(err)
+    end
+
+    -- Fallback for builds where Dependencies.UnitData itself is one Value.
+    local currentUnits = GetNativeUnitDataSnapshot()
+    if type(currentUnits) ~= "table" then
+        return false, "UnitData unavailable"
+    end
+
+    local newUnits = CloneMap(currentUnits)
+    newUnits[unitID] = newUnit
+    return SetNativeUnitDataState(newUnits)
+end
+
 local SyncMockTraitToHotbar
 local RefreshEquippedMockPresentation
 
@@ -744,18 +811,8 @@ local function ApplyTraitToNativeLocalState(unitID, rolledTrait)
         return false, "invalid trait"
     end
 
-    -- Mock units live in Dependencies.UnitData. Do NOT replace the whole
-    -- Dependencies.PlayerData root here: on rejoin that wakes unrelated
-    -- PlayerOverhead/Fusion computations and can produce locked-UIScale errors.
-    local currentUnits = GetNativeUnitDataSnapshot()
-    if type(currentUnits) ~= "table" then
-        return false, "native UnitData unavailable"
-    end
+    local currentUnit = ReadNativeUnitRecord(unitID)
 
-    local currentUnit = currentUnits[unitID]
-
-    -- Rejoin race fallback: recover this mock record from the persisted snapshot
-    -- if UnitData has not received it yet.
     if type(currentUnit) ~= "table"
         and type(PersistedSnapshot) == "table"
         and type(PersistedSnapshot.MockUnits) == "table"
@@ -768,10 +825,8 @@ local function ApplyTraitToNativeLocalState(unitID, rolledTrait)
         return false, "unit not found: " .. tostring(unitID)
     end
 
-    local newUnits = CloneMap(currentUnits)
     local newUnit = CloneMap(currentUnit)
     local newHistory = CloneArray(currentUnit.TraitHistory)
-
     local traitKey = rolledTrait.InternalName or rolledTrait.Name
     local oldTrait = currentUnit.Trait
     local oldRollAmount = tonumber(currentUnit.TraitRollAmount) or 0
@@ -786,16 +841,16 @@ local function ApplyTraitToNativeLocalState(unitID, rolledTrait)
     end
     newUnit.TraitHistory = newHistory
 
-    newUnits[unitID] = newUnit
-    MockUnitIDs[unitID] = true
-
-    local unitSyncOk, unitSyncErr = SetNativeUnitDataState(newUnits)
-    if not unitSyncOk then
-        return false, "UnitData sync failed: " .. tostring(unitSyncErr)
+    -- Critical: update the selected unit's leaf state, not the complete
+    -- PlayerData/UnitData container. TraitReroll's native UnitProcessor is
+    -- observing this exact leaf and will rebuild its native TraitProcessor UI.
+    local okWrite, writeErr = WriteNativeUnitRecord(unitID, newUnit)
+    if not okWrite then
+        return false, "unit leaf update failed: " .. tostring(writeErr)
     end
 
-    -- Keep the in-memory persisted copy current too, so a GUI rebuild/rejoin race
-    -- cannot resurrect the old trait.
+    MockUnitIDs[unitID] = true
+
     if type(PersistedSnapshot) == "table" then
         PersistedSnapshot.MockUnits = type(PersistedSnapshot.MockUnits) == "table"
             and PersistedSnapshot.MockUnits or {}
@@ -1099,19 +1154,17 @@ local function SyncTraitRerollCountDirect(previousAmount)
 end
 
 local function SettleTraitRerollVisuals(rolledTrait, previousAmount)
-    -- Native UnitData/Fusion updates can reconstruct the TraitReroll panel a
-    -- frame or two after the mock roll. Re-apply only presentation data while
-    -- that rebuild settles; no additional rolls/history/pity are performed.
+    -- Let the game's native UnitProcessor -> TraitProcessor own the trait name,
+    -- icon, gradient, rarity color and description. We only keep the visual
+    -- reroll counter/pity synchronized while the menu settles.
     local function apply()
         SyncTraitRerollCountDirect(previousAmount)
-        RenderTraitResult(rolledTrait)
         SyncTraitPityDisplays()
     end
 
     apply()
-
     task.spawn(function()
-        for _, delayTime in ipairs({0.03, 0.08, 0.16, 0.30, 0.55}) do
+        for _, delayTime in ipairs({0.03, 0.08, 0.16, 0.30}) do
             task.wait(delayTime)
             apply()
         end
@@ -1875,6 +1928,7 @@ local VisualUnequipMockUnit
 local MockEquippedSlots = {}   -- [unitID] = slotNumber
 local MockSlotUnits = {}       -- [slotNumber] = unitID
 local MockSlotViews = {}       -- [unitID] = { Scope, Instance, AnchorConnections }
+local MockSlotMounting = {}      -- [unitID] = true while one mount is being built
 local MockOverlayRoot = nil
 
 JsonSafeCopy = function(value, depth)
@@ -2270,6 +2324,10 @@ local function ResolveMockHotbarCost(unitData)
 end
 
 local function MountMockNativeSlot(unitID, slot)
+    if MockSlotMounting[unitID] then
+        return true
+    end
+
     -- Do not tear down/recreate the same visual repeatedly. During rejoin and
     -- TraitReroll rebuilds several callers can request the same mount.
     local existingView = MockSlotViews[unitID]
@@ -2294,11 +2352,13 @@ local function MountMockNativeSlot(unitID, slot)
         -- The real anchor has finally appeared; promote exactly once.
     end
 
+    MockSlotMounting[unitID] = true
     CleanupMockNativeSlot(unitID)
 
     local unitData = GetCurrentMockUnitData(unitID)
     if type(unitData) ~= "table" then
-        error("mock unit data unavailable")
+        MockSlotMounting[unitID] = nil
+        return false, "mock unit data unavailable"
     end
 
     local anchor = FindNativeHotbarSlotAnchor(slot)
@@ -2366,29 +2426,10 @@ local function MountMockNativeSlot(unitID, slot)
             end
         end))
     else
-        -- Promote fallback into the real slot once BottomHUD is available.
-        -- Only this newly-created fallback owns a promotion worker.
-        task.defer(function()
-            for _ = 1, 80 do
-                if MockEquippedSlots[unitID] ~= slot then
-                    return
-                end
-
-                local view = MockSlotViews[unitID]
-                if view and view.NativeMounted then
-                    return
-                end
-
-                task.wait(0.1)
-                if FindNativeHotbarSlotAnchor(slot) then
-                    local ok, err = pcall(MountMockNativeSlot, unitID, slot)
-                    if not ok then
-                        warn("[BLACKSIGIL] Native hotbar promotion failed:", err)
-                    end
-                    return
-                end
-            end
-        end)
+        -- Keep one stable fallback instance. Repeated promotion attempts were
+        -- racing BottomHUD reconstruction and recreating/logging the same slot
+        -- dozens of times per second. A later explicit equip/refresh can mount
+        -- natively if an anchor is actually available.
     end
 
     MockSlotViews[unitID] = {
@@ -2413,6 +2454,7 @@ local function MountMockNativeSlot(unitID, slot)
         )
     )
 
+    MockSlotMounting[unitID] = nil
     return true
 end
 
@@ -3057,7 +3099,7 @@ QueuePersistentSave()
 SafeLog("Loaded", string.format("Trait engine ready with %d live MockTraits; native banner summon engine ready", #TraitDatabase))
 SafeLog("Equip", "Visual mock equip/unequip enabled")
 SafeLog("Currency", "Native client affordability mirrors enabled")
-SafeLog("Hotbar", "v15 native visuals; idempotent fallback mounts; reroll UI settling enabled")
+SafeLog("Hotbar", "v15 native visuals; single fallback mount; native TraitProcessor reroll UI")
 SafeLog("Pity", "Summon pity 50/400/10000; trait pity Draconic 300 / Forsaken 500 / Primordial 750 / Unbound 1500")
 SafeLog("State", "Using leaf ItemData Values + PlayerData.HotbarData backing state")
 
