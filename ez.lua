@@ -33,6 +33,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TeleportService = game:GetService("TeleportService")
 local HttpService = game:GetService("HttpService")
 local StarterPlayer = game:GetService("StarterPlayer")
+local GuiService = game:GetService("GuiService")
 local LocalPlayer = Players.LocalPlayer
 
 -- Set this to the raw URL hosting this BLACKSIGIL build for rejoin auto-execution.
@@ -44,10 +45,6 @@ local FusionPackage = ReplicatedStorage:WaitForChild("FusionPackage")
 local Dependencies = require(FusionPackage:WaitForChild("Dependencies"))
 local Fusion = require(FusionPackage:WaitForChild("Fusion"))
 local NativeState = require(FusionPackage:WaitForChild("State"))
-local NativeAssetDataProcessor = require(FusionPackage.Components.Processors.Asset.AssetData)
-local NativeUnitProcessor = require(FusionPackage.Components.Processors.Asset.Unit)
-local NativeModelDisplay = require(FusionPackage.Components.Base.ModelDisplay)
-local NativeTraitIcon = require(FusionPackage.Components.Icons.Trait)
 local NodesModule = require(ReplicatedStorage:WaitForChild("Nodes"))
 local OnEvent = Fusion.OnEvent
 local PlayerDataState = Dependencies.PlayerData
@@ -1978,62 +1975,172 @@ local function GetMockOverlayRoot()
         return MockOverlayRoot
     end
 
-    -- Never parent mock Fusion content into BottomHUD. BottomHUD is rebuilt by
-    -- the game and destroying its descendants while Fusion owns UIScale objects
-    -- can produce the locked-Parent callback error. Keep a permanent, separate
-    -- BLACKSIGIL ScreenGui and only mirror the native slot's screen rectangle.
     local screenGui = PlayerGui:FindFirstChild("BLACKSIGIL_MockHotbar")
     if not screenGui or not screenGui:IsA("ScreenGui") then
-        if screenGui then pcall(function() screenGui:Destroy() end) end
+        if screenGui then
+            pcall(function() screenGui:Destroy() end)
+        end
+
         screenGui = Instance.new("ScreenGui")
         screenGui.Name = "BLACKSIGIL_MockHotbar"
-        screenGui.IgnoreGuiInset = false
+        -- AbsolutePosition is viewport-space, so use the same origin.
+        screenGui.IgnoreGuiInset = true
         screenGui.ResetOnSpawn = false
-        screenGui.DisplayOrder = 100
+        screenGui.DisplayOrder = 250
+        screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
         screenGui.Parent = PlayerGui
     end
 
-    local root = Instance.new("Frame")
-    root.Name = "BLACKSIGIL_MockHotbarOverlay"
-    root.BackgroundTransparency = 1
-    root.BorderSizePixel = 0
-    root.Size = UDim2.fromScale(1, 1)
-    root.Position = UDim2.fromScale(0, 0)
-    root.ZIndex = 100
-    root.Parent = screenGui
+    local root = screenGui:FindFirstChild("BLACKSIGIL_MockHotbarOverlay")
+    if not root then
+        root = Instance.new("Frame")
+        root.Name = "BLACKSIGIL_MockHotbarOverlay"
+        root.BackgroundTransparency = 1
+        root.BorderSizePixel = 0
+        root.Size = UDim2.fromScale(1, 1)
+        root.Position = UDim2.fromScale(0, 0)
+        root.ZIndex = 100
+        root.Parent = screenGui
+    end
 
     MockOverlayRoot = root
     return root
 end
 
-local function FindNativeHotbarSlotAnchor(slot)
+local function IsSlotSized(obj)
+    if not obj or not obj:IsA("GuiObject") or not obj.Visible then
+        return false
+    end
+
+    local size = obj.AbsoluteSize
+    return size.X >= 75 and size.X <= 145
+        and size.Y >= 75 and size.Y <= 145
+end
+
+local function FindHotbarRow()
     local hud = PlayerGui:FindFirstChild("BottomHUD")
     if not hud then
         return nil
     end
 
-    local best = nil
+    local camera = workspace.CurrentCamera
+    local viewport = camera and camera.ViewportSize or Vector2.new(1920, 1080)
+
+    local bestSlots = nil
     local bestScore = -math.huge
 
-    for _, obj in ipairs(hud:GetDescendants()) do
-        if obj:IsA("GuiObject") and obj.Visible and obj.LayoutOrder == slot then
-            local size = obj.AbsoluteSize
-            if size.X >= 80 and size.X <= 140 and size.Y >= 80 and size.Y <= 140 then
-                local score = 0
-                if obj:IsA("GuiButton") then score = score + 10 end
-                if math.abs(size.X - 108) <= 12 then score = score + 5 end
-                if math.abs(size.Y - 108) <= 12 then score = score + 5 end
-                if obj:FindFirstChildOfClass("UIAspectRatioConstraint") then score = score + 2 end
+    for _, parent in ipairs(hud:GetDescendants()) do
+        if parent:IsA("GuiObject") then
+            local layout = parent:FindFirstChildOfClass("UIListLayout")
+                or parent:FindFirstChildOfClass("UIGridLayout")
 
-                if score > bestScore then
-                    best = obj
-                    bestScore = score
+            if layout then
+                local children = {}
+
+                for _, child in ipairs(parent:GetChildren()) do
+                    if IsSlotSized(child) then
+                        table.insert(children, child)
+                    end
+                end
+
+                if #children >= 3 and #children <= 8 then
+                    table.sort(children, function(a, b)
+                        return a.AbsolutePosition.X < b.AbsolutePosition.X
+                    end)
+
+                    local minY, maxY = math.huge, -math.huge
+                    local avgY = 0
+                    for _, child in ipairs(children) do
+                        local y = child.AbsolutePosition.Y
+                        minY = math.min(minY, y)
+                        maxY = math.max(maxY, y)
+                        avgY += y
+                    end
+                    avgY /= #children
+
+                    local rowSpread = maxY - minY
+                    if rowSpread <= 28 then
+                        local score = #children * 25
+                        score += math.max(0, avgY - viewport.Y * 0.55) / 4
+
+                        local avgSize = 0
+                        for _, child in ipairs(children) do
+                            avgSize += (child.AbsoluteSize.X + child.AbsoluteSize.Y) * 0.5
+                        end
+                        avgSize /= #children
+                        score -= math.abs(avgSize - 108) * 1.5
+
+                        if score > bestScore then
+                            bestScore = score
+                            bestSlots = children
+                        end
+                    end
                 end
             end
         end
     end
 
-    return best
+    return bestSlots
+end
+
+local function FindNativeHotbarSlotAnchor(slot)
+    local row = FindHotbarRow()
+    if row and row[slot] then
+        return row[slot], row
+    end
+
+    -- Fallback: collect bottom-screen square buttons/frames, dedupe by position,
+    -- then choose them from left to right.
+    local hud = PlayerGui:FindFirstChild("BottomHUD")
+    if not hud then
+        return nil
+    end
+
+    local camera = workspace.CurrentCamera
+    local viewport = camera and camera.ViewportSize or Vector2.new(1920, 1080)
+    local candidates = {}
+    local seen = {}
+
+    for _, obj in ipairs(hud:GetDescendants()) do
+        if IsSlotSized(obj) and obj.AbsolutePosition.Y >= viewport.Y * 0.62 then
+            local key = string.format(
+                "%d:%d",
+                math.floor(obj.AbsolutePosition.X / 4),
+                math.floor(obj.AbsolutePosition.Y / 4)
+            )
+
+            if not seen[key] then
+                seen[key] = true
+                table.insert(candidates, obj)
+            end
+        end
+    end
+
+    table.sort(candidates, function(a, b)
+        local ay, by = a.AbsolutePosition.Y, b.AbsolutePosition.Y
+        if math.abs(ay - by) > 20 then
+            return ay > by
+        end
+        return a.AbsolutePosition.X < b.AbsolutePosition.X
+    end)
+
+    -- Keep only the lowest coherent row.
+    if #candidates > 0 then
+        local baseY = candidates[1].AbsolutePosition.Y
+        local row = {}
+        for _, obj in ipairs(candidates) do
+            if math.abs(obj.AbsolutePosition.Y - baseY) <= 24 then
+                table.insert(row, obj)
+            end
+        end
+        table.sort(row, function(a, b)
+            return a.AbsolutePosition.X < b.AbsolutePosition.X
+        end)
+
+        return row[slot], row
+    end
+
+    return nil
 end
 
 local function GetFallbackSlotRect(slot)
@@ -2043,8 +2150,10 @@ local function GetFallbackSlotRect(slot)
     local totalWidth = maxSlots * slotSize + math.max(0, maxSlots - 1) * gap
     local camera = workspace.CurrentCamera
     local viewport = camera and camera.ViewportSize or Vector2.new(1920, 1080)
+
+    -- Match the game's bottom-center row more closely.
     local x = math.floor((viewport.X - totalWidth) * 0.5 + (slot - 1) * (slotSize + gap))
-    local y = math.floor(viewport.Y - 150)
+    local y = math.floor(viewport.Y - slotSize - 24)
     return Vector2.new(x, y), Vector2.new(slotSize, slotSize)
 end
 
@@ -2062,12 +2171,6 @@ local function CleanupMockNativeSlot(unitID)
         end
     end
 
-    if view.Scope and type(view.Scope.doCleanup) == "function" then
-        pcall(function()
-            view.Scope:doCleanup()
-        end)
-    end
-
     if typeof(view.Host) == "Instance" then
         pcall(function()
             view.Host:Destroy()
@@ -2079,6 +2182,7 @@ end
 
 local function CreateMockSlotHost(anchor, slot)
     local root = GetMockOverlayRoot()
+
     local host = Instance.new("Frame")
     host.Name = "BLACKSIGIL_MockOverlaySlot_" .. tostring(slot)
     host.BackgroundTransparency = 1
@@ -2089,22 +2193,106 @@ local function CreateMockSlotHost(anchor, slot)
     host.Parent = root
 
     local function syncRect(target)
-        if target and target.Parent then
+        if target and target.Parent and target.AbsoluteSize.X > 1 then
             local pos = target.AbsolutePosition
             local size = target.AbsoluteSize
-            host.Position = UDim2.fromOffset(pos.X, pos.Y)
-            host.Size = UDim2.fromOffset(size.X, size.Y)
+
+            host.Position = UDim2.fromOffset(
+                math.floor(pos.X + 0.5),
+                math.floor(pos.Y + 0.5)
+            )
+            host.Size = UDim2.fromOffset(
+                math.floor(size.X + 0.5),
+                math.floor(size.Y + 0.5)
+            )
+            host.Visible = target.Visible
             return true
         end
 
         local pos, size = GetFallbackSlotRect(slot)
         host.Position = UDim2.fromOffset(pos.X, pos.Y)
         host.Size = UDim2.fromOffset(size.X, size.Y)
+        host.Visible = true
         return false
     end
 
     local nativeFound = syncRect(anchor)
     return host, nativeFound, syncRect
+end
+
+local function GetFollowerModel(unitID)
+    local ok, followers = pcall(function()
+        return NodesModule.GET_PLAYER_FOLLOWERS:InvokeSelf(LocalPlayer)
+    end)
+
+    if not ok or type(followers) ~= "table" then
+        return nil
+    end
+
+    local meta = followers[unitID]
+    if type(meta) == "table" and typeof(meta.model) == "Instance" then
+        return meta.model
+    end
+
+    return nil
+end
+
+local function RemoveScriptsFromClone(root)
+    for _, obj in ipairs(root:GetDescendants()) do
+        if obj:IsA("Script") or obj:IsA("LocalScript") or obj:IsA("ModuleScript") then
+            obj:Destroy()
+        elseif obj:IsA("BasePart") then
+            obj.Anchored = true
+            obj.CanCollide = false
+            obj.CanTouch = false
+            obj.CanQuery = false
+        end
+    end
+end
+
+local function FillViewportFromFollower(viewport, unitID)
+    if not viewport or not viewport.Parent then
+        return false
+    end
+
+    local source = GetFollowerModel(unitID)
+    if not source then
+        return false
+    end
+
+    viewport:ClearAllChildren()
+
+    local world = Instance.new("WorldModel")
+    world.Name = "World"
+    world.Parent = viewport
+
+    local camera = Instance.new("Camera")
+    camera.Name = "Camera"
+    camera.Parent = viewport
+    viewport.CurrentCamera = camera
+
+    local clone = source:Clone()
+    RemoveScriptsFromClone(clone)
+    clone.Parent = world
+
+    local okBox, boxCF, boxSize = pcall(function()
+        return clone:GetBoundingBox()
+    end)
+
+    if okBox then
+        clone:PivotTo(CFrame.new() * boxCF.Rotation:Inverse())
+        local _, size = clone:GetBoundingBox()
+        local maxDim = math.max(size.X, size.Y, size.Z, 1)
+        local center = Vector3.new(0, size.Y * 0.04, 0)
+        camera.CFrame = CFrame.lookAt(
+            center + Vector3.new(0, size.Y * 0.08, maxDim * 1.45),
+            center
+        )
+    else
+        camera.CFrame = CFrame.lookAt(Vector3.new(0, 2, 8), Vector3.new())
+    end
+
+    return true
 end
 
 local function ResolveMockPlacementCost(unitID, unitData, slot)
@@ -2220,112 +2408,115 @@ local function MountMockNativeSlot(unitID, slot)
     end
 
     local anchor = FindNativeHotbarSlotAnchor(slot)
-    local host, mountedInNativeSlot, syncHostRect = CreateMockSlotHost(anchor, slot)
-
-    -- Do not instantiate Base.Slot/ButtonBase here. Its hover/click plumbing
-    -- calls Actions.PlaySound -> GetSettingValue, which can require modules from
-    -- a RobloxScript-only context and error when created by an executor thread.
-    -- Instead compose only the safe visual pieces used by Unit slots.
-    local scope = Fusion.scoped(Fusion, NativeState, {
-        AssetDataProcessor = NativeAssetDataProcessor,
-        UnitProcessor = NativeUnitProcessor,
-        ModelDisplay = NativeModelDisplay,
-        TraitIcon = NativeTraitIcon
-    })
-
-    local dataState = scope:Value(CloneMap(unitData))
-    local assetState = scope:Value(unitData.Asset)
-    local idState = scope:Value(unitID)
-    local assetStates = scope:AssetDataProcessor({
-        ID = idState,
-        Asset = assetState,
-        Data = dataState,
-        AssetType = "Unit"
-    })
-    local unitStates = scope:UnitProcessor({
-        AssetStates = assetStates
-    })
+    local host, aligned, syncHostRect = CreateMockSlotHost(anchor, slot)
 
     local background = Instance.new("Frame")
     background.Name = "BLACKSIGIL_Visual"
-    background.BackgroundColor3 = Color3.fromRGB(24, 24, 28)
-    background.BackgroundTransparency = 0.05
+    background.BackgroundColor3 = Color3.fromRGB(13, 13, 16)
+    background.BackgroundTransparency = 0.03
     background.BorderSizePixel = 0
     background.Size = UDim2.fromScale(1, 1)
     background.ZIndex = 101
+    background.ClipsDescendants = true
     background.Parent = host
 
     local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(0, 9)
+    corner.CornerRadius = UDim.new(0, 8)
     corner.Parent = background
 
     local stroke = Instance.new("UIStroke")
     stroke.Thickness = 2
     stroke.Transparency = 0.15
+    stroke.Color = Color3.fromRGB(76, 76, 90)
     stroke.Parent = background
 
-    -- Native model viewport only; this path does not use ButtonBase or
-    -- HotbarLayout/UnitStatsProcessor.
-    local viewport = scope:ModelDisplay({
-        Parent = background,
-        HasShadow = false,
-        ZIndex = 104,
-        Size = UDim2.fromScale(0.96, 0.92),
-        Position = UDim2.fromScale(0.5, 0.94),
-        AnchorPoint = Vector2.new(0.5, 1),
-        Model = unitStates.Model,
-        ModelOffset = unitStates.ViewportOffset,
-        CameraOffset = Vector3.new(0, 1.45, -3.75),
-        Accessory = unitStates.Accessory,
-        GradientTransparency = NumberSequence.new(0)
-    })
+    local viewport = Instance.new("ViewportFrame")
+    viewport.Name = "BLACKSIGIL_UnitViewport"
+    viewport.BackgroundTransparency = 1
+    viewport.BorderSizePixel = 0
+    viewport.Position = UDim2.fromScale(0.04, 0.08)
+    viewport.Size = UDim2.fromScale(0.92, 0.82)
+    viewport.ZIndex = 104
+    viewport.Ambient = Color3.fromRGB(200, 200, 200)
+    viewport.LightColor = Color3.new(1, 1, 1)
+    viewport.LightDirection = Vector3.new(-1, -1, -1)
+    viewport.Parent = background
 
     local levelLabel = Instance.new("TextLabel")
     levelLabel.Name = "BLACKSIGIL_Level"
-    levelLabel.BackgroundColor3 = Color3.fromRGB(18, 18, 20)
-    levelLabel.BackgroundTransparency = 0.05
+    levelLabel.BackgroundColor3 = Color3.fromRGB(18, 18, 21)
+    levelLabel.BackgroundTransparency = 0.08
     levelLabel.BorderSizePixel = 0
     levelLabel.Position = UDim2.fromOffset(4, 3)
-    levelLabel.Size = UDim2.fromOffset(48, 20)
-    levelLabel.ZIndex = 110
+    levelLabel.Size = UDim2.fromOffset(46, 19)
+    levelLabel.ZIndex = 112
     levelLabel.Font = Enum.Font.GothamBold
     levelLabel.TextColor3 = Color3.new(1, 1, 1)
     levelLabel.TextStrokeTransparency = 0.35
     levelLabel.TextScaled = true
     levelLabel.Parent = host
+
     local levelCorner = Instance.new("UICorner")
-    levelCorner.CornerRadius = UDim.new(0, 6)
+    levelCorner.CornerRadius = UDim.new(0, 5)
     levelCorner.Parent = levelLabel
 
-    local function refreshLevel()
+    local function refreshText()
         local current = GetCurrentMockUnitData(unitID) or unitData
         local level = tonumber(current.Level or current.Lvl or 1) or 1
         levelLabel.Text = "Lvl " .. tostring(math.floor(level))
     end
-    refreshLevel()
+    refreshText()
 
-    local traitHost = Instance.new("Frame")
-    traitHost.Name = "BLACKSIGIL_Trait"
-    traitHost.BackgroundTransparency = 1
-    traitHost.AnchorPoint = Vector2.new(1, 0)
-    traitHost.Position = UDim2.new(1, -5, 0, 5)
-    traitHost.Size = UDim2.fromOffset(28, 28)
-    traitHost.ZIndex = 115
-    traitHost.Parent = host
+    local traitImage = Instance.new("ImageLabel")
+    traitImage.Name = "BLACKSIGIL_Trait"
+    traitImage.BackgroundTransparency = 1
+    traitImage.AnchorPoint = Vector2.new(1, 0)
+    traitImage.Position = UDim2.new(1, -4, 0, 4)
+    traitImage.Size = UDim2.fromOffset(27, 27)
+    traitImage.ZIndex = 115
+    traitImage.ScaleType = Enum.ScaleType.Fit
+    traitImage.Parent = host
 
-    local traitIcon = scope:TraitIcon({
-        Parent = traitHost,
-        Animated = false,
-        HasGlow = false,
-        Size = UDim2.fromScale(1, 1),
-        Trait = unitStates.Trait,
-        Visible = unitStates.HasTrait
-    })
+    local function refreshTrait()
+        local current = GetCurrentMockUnitData(unitID) or unitData
+        local traitName = current.Trait
+
+        if type(traitName) == "table" then
+            traitName = traitName.Name or traitName.Trait or traitName.DisplayName
+        end
+
+        local info = traitName and (
+            MockTraits[traitName]
+            or GetTraitByName(traitName)
+        )
+
+        if type(info) == "table" and type(info.Image) == "string" then
+            traitImage.Image = info.Image
+            traitImage.Visible = true
+        else
+            traitImage.Image = ""
+            traitImage.Visible = false
+        end
+    end
+    refreshTrait()
 
     local resolvedCost = ResolveMockPlacementCost(unitID, unitData, slot)
     local costLabel = CreateMockPlacementCostLabel(host, resolvedCost)
 
-    -- Plain transparent click catcher: no Fusion ButtonBase, no PlaySound.
+    local slotNumber = Instance.new("TextLabel")
+    slotNumber.Name = "BLACKSIGIL_SlotNumber"
+    slotNumber.BackgroundTransparency = 1
+    slotNumber.AnchorPoint = Vector2.new(1, 1)
+    slotNumber.Position = UDim2.new(1, -5, 1, -4)
+    slotNumber.Size = UDim2.fromOffset(18, 18)
+    slotNumber.ZIndex = 114
+    slotNumber.Font = Enum.Font.GothamBold
+    slotNumber.Text = tostring(slot)
+    slotNumber.TextColor3 = Color3.fromRGB(190, 190, 195)
+    slotNumber.TextStrokeTransparency = 0.3
+    slotNumber.TextScaled = true
+    slotNumber.Parent = host
+
     local click = Instance.new("ImageButton")
     click.Name = "BLACKSIGIL_Click"
     click.BackgroundTransparency = 1
@@ -2333,49 +2524,66 @@ local function MountMockNativeSlot(unitID, slot)
     click.Size = UDim2.fromScale(1, 1)
     click.ZIndex = 200
     click.Parent = host
-    click.MouseButton1Click:Connect(function()
+
+    local connections = {}
+
+    table.insert(connections, click.MouseButton1Click:Connect(function()
         SafeLog("Mock Hotbar", string.format("slot %d selected (%s)", slot, unitID))
-    end)
-    click.MouseButton2Click:Connect(function()
+    end))
+
+    table.insert(connections, click.MouseButton2Click:Connect(function()
         task.defer(function()
             VisualUnequipMockUnit(unitID)
         end)
+    end))
+
+    -- The follower is added immediately after this function in VisualEquip.
+    -- Retry briefly so its already-built native model can be cloned into the viewport.
+    task.spawn(function()
+        for _ = 1, 30 do
+            if not host.Parent or MockEquippedSlots[unitID] ~= slot then
+                return
+            end
+            if FillViewportFromFollower(viewport, unitID) then
+                return
+            end
+            task.wait(0.1)
+        end
     end)
 
-    task.defer(function()
+    task.spawn(function()
         local currentAnchor = anchor
-        while MockEquippedSlots[unitID] == slot and host.Parent do
-            task.wait(0.2)
+
+        while host.Parent and MockEquippedSlots[unitID] == slot do
+            task.wait(0.25)
+
             if not currentAnchor or not currentAnchor.Parent then
                 currentAnchor = FindNativeHotbarSlotAnchor(slot)
             end
-            local foundNative = false
-            if syncHostRect then
-                foundNative = syncHostRect(currentAnchor)
-            end
+
+            local isAligned = syncHostRect(currentAnchor)
+
             local view = MockSlotViews[unitID]
             if view then
                 view.Anchor = currentAnchor
-                view.NativeMounted = foundNative
+                view.NativeMounted = isAligned
             end
         end
     end)
 
     MockSlotViews[unitID] = {
-        Scope = scope,
-        Instance = viewport,
         Host = host,
         Anchor = anchor,
-        Connections = {},
+        Connections = connections,
         Slot = slot,
-        DataState = dataState,
-        AssetState = assetState,
-        IDState = idState,
-        AssetStates = assetStates,
-        UnitStates = unitStates,
+        Viewport = viewport,
+        TraitImage = traitImage,
+        LevelLabel = levelLabel,
         CostLabel = costLabel,
         ResolvedCost = resolvedCost,
-        NativeMounted = mountedInNativeSlot
+        NativeMounted = aligned,
+        RefreshTrait = refreshTrait,
+        RefreshText = refreshText,
     }
 
     SafeLog(
@@ -2384,7 +2592,7 @@ local function MountMockNativeSlot(unitID, slot)
             "%s -> slot %d (%s)",
             unitID,
             slot,
-            mountedInNativeSlot and "aligned visual" or "fallback visual"
+            aligned and "aligned visual" or "fallback visual"
         )
     )
 
@@ -2451,46 +2659,44 @@ RefreshEquippedMockPresentation = function(unitID)
         return false
     end
 
-    -- Update the native Slot -> AssetDataProcessor -> Unit viewport chain.
-    -- Mock slots intentionally use Textless display to avoid HotbarLayout's
-    -- UnitStatsProcessor require restriction.
     local view = MockSlotViews[unitID]
     if view then
-        if view.DataState and type(view.DataState.set) == "function" then
-            pcall(function()
-                view.DataState:set(CloneMap(unitData))
-            end)
+        if type(view.RefreshTrait) == "function" then
+            pcall(view.RefreshTrait)
         end
-        if view.AssetState and type(view.AssetState.set) == "function" then
-            pcall(function()
-                view.AssetState:set(unitData.Asset)
+        if type(view.RefreshText) == "function" then
+            pcall(view.RefreshText)
+        end
+        if view.Viewport then
+            task.defer(function()
+                FillViewportFromFollower(view.Viewport, unitID)
             end)
         end
 
         local refreshedCost = ResolveMockPlacementCost(unitID, unitData, slot)
-        if refreshedCost then
-            if view.CostState and type(view.CostState.set) == "function" then
-                pcall(function() view.CostState:set(refreshedCost) end)
-            end
-            if view.Host then
-                view.CostLabel = CreateMockPlacementCostLabel(view.Host, refreshedCost)
-                view.ResolvedCost = refreshedCost
-            end
+        if refreshedCost and view.Host then
+            view.CostLabel = CreateMockPlacementCostLabel(view.Host, refreshedCost)
+            view.ResolvedCost = refreshedCost
         end
     else
         local ok, err = pcall(MountMockNativeSlot, unitID, slot)
         if not ok then
-            warn("[BLACKSIGIL] Native hotbar refresh mount failed:", err)
+            warn("[BLACKSIGIL] hotbar refresh mount failed:", err)
         end
     end
 
-    -- Rebuild native workspace follower so the billboard/model receives the
-    -- newly rolled Trait/Shiny/Skin data too.
     local extra = GetFollowerExtraData(unitID, slot)
     if extra then
         pcall(function()
             extra.Rebuild = true
             NodesModule.UNIT_UPDATE_FOR_PLAYER:FireSelf(LocalPlayer, unitID, extra)
+        end)
+
+        task.delay(0.15, function()
+            local currentView = MockSlotViews[unitID]
+            if currentView and currentView.Viewport then
+                FillViewportFromFollower(currentView.Viewport, unitID)
+            end
         end)
     end
 
@@ -2518,18 +2724,18 @@ local function VisualEquipMockUnit(unitID, requestedSlot)
     MockEquippedSlots[unitID] = slot
     MockSlotUnits[slot] = unitID
 
-    local okSlot, slotErr = pcall(MountMockNativeSlot, unitID, slot)
-    if not okSlot then
-        warn("[BLACKSIGIL] Native mock slot mount failed:", slotErr)
-    end
-
     RemoveMockFollower(unitID)
     local okFollower, followerErr = AddMockFollower(unitID, slot)
     if not okFollower then
         warn("[BLACKSIGIL] Mock follower add failed:", followerErr)
     end
 
-    SafeLog("Visual Equip", string.format("%s -> native visual slot %d + follower", unitID, slot))
+    local okSlot, slotErr = pcall(MountMockNativeSlot, unitID, slot)
+    if not okSlot then
+        warn("[BLACKSIGIL] Mock hotbar visual mount failed:", slotErr)
+    end
+
+    SafeLog("Visual Equip", string.format("%s -> safe visual slot %d + follower", unitID, slot))
     QueuePersistentSave()
     return true
 end
