@@ -1,5 +1,5 @@
 --[[
-    EXECO - Anime Expeditions (Luna Interface Edition)
+    EXECO - Anime Expeditions (Starlight Interface Edition)
     Trait + Banner Feature Engine - Native Fusion Edition
 
     This build keeps the existing feature behavior while
@@ -33,10 +33,10 @@ end
 WaitForTeleportBootStability()
 
 -- ================================
--- LUNA INITIALIZATION
+-- STARLIGHT INITIALIZATION
 -- ================================
--- Rejoin boots are headless. Luna is not fetched or constructed at all.
-local Luna, Window, FeaturesTab, SettingsTab
+-- Rejoin boots stay headless. Starlight is only constructed on a normal execute.
+local Starlight, NebulaIcons, Window
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -48,33 +48,44 @@ local EXECO_RAW_URL = "https://raw.githubusercontent.com/szty-v/chujcieto/refs/h
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
 if not __BLACKSIGIL_TELEPORT_BOOT then
-    local ok, result = pcall(function()
-        return loadstring(game:HttpGet("https://raw.githubusercontent.com/Nebula-Softworks/Luna-Interface-Suite/refs/heads/master/source.lua"))()
+    local env = (type(getgenv) == "function" and getgenv()) or _G
+    env.InterfaceName = "EXECO_Starlight"
+
+    local okUI, uiResult = pcall(function()
+        return loadstring(game:HttpGet("https://raw.nebulasoftworks.xyz/starlight"))()
     end)
-    if not ok or type(result) ~= "table" then
-        warn("[EXECO] Failed to load Luna:", result)
+    local okIcons, iconResult = pcall(function()
+        return loadstring(game:HttpGet("https://raw.nebulasoftworks.xyz/nebula-icon-library-loader"))()
+    end)
+
+    if not okUI or type(uiResult) ~= "table" then
+        warn("[EXECO] Failed to load Starlight:", uiResult)
         return
     end
 
-    Luna = result
-    Window = Luna:CreateWindow({
-        Name = "EXECO",
-        Subtitle = "Anime Expeditions",
-        LogoID = "82795327169782",
-        LoadingEnabled = false,
-        ConfigSettings = {
-            RootFolder = nil,
-            ConfigFolder = "EXECO"
-        },
-        KeySystem = false
-    })
+    Starlight = uiResult
+    NebulaIcons = okIcons and iconResult or nil
 
-    FeaturesTab = Window:CreateTab({
-        Name = "Resources", Icon = "tune", ImageSource = "Material", ShowTitle = true
-    })
-    SettingsTab = Window:CreateTab({
-        Name = "Settings", Icon = "settings", ImageSource = "Material", ShowTitle = true
-    })
+    local okWindow, windowResult = pcall(function()
+        return Starlight:CreateWindow({
+            Name = "EXECO",
+            Subtitle = "Anime Expeditions",
+            Icon = 82795327169782,
+            LoadingEnabled = false,
+            InterfaceAdvertisingPrompts = false,
+            NotifyOnCallbackError = true,
+            FileSettings = {
+                ConfigFolder = "EXECO"
+            }
+        })
+    end)
+
+    if not okWindow or type(windowResult) ~= "table" then
+        warn("[EXECO] Failed to create Starlight window:", windowResult)
+        return
+    end
+
+    Window = windowResult
 end
 
 -- ================================
@@ -3176,7 +3187,7 @@ oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
 end))
 
 -- ================================
--- UI: LUNA
+-- UI: STARLIGHT
 -- ================================
 local function QueueBlackSigilForTeleport()
     local queueFn = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport)
@@ -3197,268 +3208,373 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/szty-v/chujcieto/refs
     return true
 end
 
--- Never construct Luna during queued rejoin execution.
-if not __BLACKSIGIL_TELEPORT_BOOT and Luna and Window and FeaturesTab and SettingsTab then
-    -- Keep UI construction isolated: one unsupported/broken Luna widget should not
-    -- abort the rest of the interface. This also makes future Luna updates easier
-    -- to diagnose from the executor console.
+-- Never construct Starlight during queued rejoin execution.
+if not __BLACKSIGIL_TELEPORT_BOOT and Starlight and Window then
     local function SafeUI(name, builder)
         local ok, result = pcall(builder)
         if not ok then
-            warn("[EXECO] Luna UI failed (" .. tostring(name) .. "):", result)
+            warn("[EXECO] Starlight UI failed (" .. tostring(name) .. "):", result)
             return nil
         end
         return result
     end
 
-    -- Luna's native dashboard/home view. Icon=2 selects the dashboard icon.
-    SafeUI("Dashboard", function()
-        return Window:CreateHomeTab({
-            SupportedExecutors = {},
-            Icon = 2
-        })
+    local function Icon(name, source)
+        if not NebulaIcons or type(NebulaIcons.GetIcon) ~= "function" then
+            return nil
+        end
+        local ok, result = pcall(function()
+            return NebulaIcons:GetIcon(name, source or "Material")
+        end)
+        return ok and result or nil
+    end
+
+    local MainSection = SafeUI("main tab section", function()
+        return Window:CreateTabSection("EXECO")
+    end)
+    local SystemSection = SafeUI("system tab section", function()
+        return Window:CreateTabSection("System")
     end)
 
-    -- Give non-resource actions their own pages instead of crowding one tab.
-    local RollbackTab = SafeUI("Rollback tab", function()
-        return Window:CreateTab({
+    local DashboardTab = MainSection and SafeUI("dashboard tab", function()
+        return MainSection:CreateTab({
+            Name = "Dashboard",
+            Icon = Icon("dashboard", "Material"),
+            Columns = 2
+        }, "EXECO_Dashboard")
+    end)
+
+    local ResourcesTab = MainSection and SafeUI("resources tab", function()
+        return MainSection:CreateTab({
+            Name = "Resources",
+            Icon = Icon("database", "Lucide"),
+            Columns = 2
+        }, "EXECO_Resources")
+    end)
+
+    local RollbackTab = MainSection and SafeUI("rollback tab", function()
+        return MainSection:CreateTab({
             Name = "Rollback",
-            Icon = "history",
-            ImageSource = "Material",
-            ShowTitle = true
-        })
+            Icon = Icon("history", "Material"),
+            Columns = 2
+        }, "EXECO_Rollback")
     end)
 
-    local SessionTab = SafeUI("Session tab", function()
-        return Window:CreateTab({
-            Name = "Session",
-            Icon = "sync",
-            ImageSource = "Material",
-            ShowTitle = true
-        })
+    local SettingsTab = SystemSection and SafeUI("settings tab", function()
+        return SystemSection:CreateTab({
+            Name = "Settings",
+            Icon = Icon("settings", "Material"),
+            Columns = 2
+        }, "EXECO_Settings")
     end)
 
-    SafeUI("Resources intro", function()
-        return FeaturesTab:CreateParagraph({
-            Title = "Resource Controls",
-            Text = "Adjust local EXECO values. Changes are mirrored into the client UI and saved to EXECO's persistent mock state."
-        })
-    end)
-    SafeUI("Resources section", function() return FeaturesTab:CreateSection("Resources") end)
+    -- Dashboard: only useful at-a-glance status and session actions.
+    if DashboardTab then
+        local StatusBox = SafeUI("dashboard status", function()
+            return DashboardTab:CreateGroupbox({
+                Name = "Status",
+                Icon = Icon("activity", "Lucide"),
+                Column = 1
+            }, "EXECO_StatusBox")
+        end)
 
-    SafeUI("Gems slider", function()
-        return FeaturesTab:CreateSlider({
-            Name = "Gems",
-            Range = {0, 1000000},
-            Increment = 1,
-            CurrentValue = math.clamp(VisualState.Gems, 0, 1000000),
-            Callback = function(value)
-                VisualState.Gems = math.floor(tonumber(value) or 0)
-                local ok, err = SetLocalItemAmount("Gem", VisualState.Gems)
-                if not ok then warn("[EXECO] Gem slider sync warning:", err) end
-                SyncAllDisplays()
-                QueuePersistentSave()
-            end
-        }, "EXECO_Gems")
-    end)
+        if StatusBox then
+            SafeUI("status engine", function()
+                return StatusBox:CreateLabel({
+                    Name = "Trait engine: " .. tostring(#TraitDatabase) .. " live traits",
+                    Icon = Icon("check_circle", "Material")
+                }, "EXECO_StatusTraits")
+            end)
+            SafeUI("status persistence", function()
+                return StatusBox:CreateLabel({
+                    Name = "Persistent mock state enabled",
+                    Icon = Icon("save", "Material")
+                }, "EXECO_StatusPersistence")
+            end)
+            SafeUI("status hotbar", function()
+                return StatusBox:CreateLabel({
+                    Name = "Native client presentation enabled",
+                    Icon = Icon("visibility", "Material")
+                }, "EXECO_StatusPresentation")
+            end)
+        end
 
-    SafeUI("Gold slider", function()
-        return FeaturesTab:CreateSlider({
-            Name = "Gold",
-            Range = {0, 10000000},
-            Increment = 1,
-            CurrentValue = math.clamp(VisualState.Gold, 0, 10000000),
-            Callback = function(value)
-                VisualState.Gold = math.floor(tonumber(value) or 0)
-                SyncAllDisplays()
-                QueuePersistentSave()
-            end
-        }, "EXECO_Gold")
-    end)
+        local SessionBox = SafeUI("dashboard session", function()
+            return DashboardTab:CreateGroupbox({
+                Name = "Session",
+                Icon = Icon("refresh", "Material"),
+                Column = 2
+            }, "EXECO_SessionBox")
+        end)
 
-    SafeUI("Trait rerolls slider", function()
-        return FeaturesTab:CreateSlider({
-            Name = "Trait Rerolls",
-            Range = {0, 100000},
-            Increment = 1,
-            CurrentValue = math.clamp(VisualState.TraitRerolls, 0, 100000),
-            Callback = function(value)
-                VisualState.TraitRerolls = math.floor(tonumber(value) or 0)
-                local ok, err = SetLocalItemAmount(GetTraitRerollItemName(), VisualState.TraitRerolls)
-                if not ok then warn("[EXECO] Reroll slider sync warning:", err) end
-                SyncAllDisplays()
-                QueuePersistentSave()
-            end
-        }, "EXECO_TraitRerolls")
-    end)
+        if SessionBox then
+            SafeUI("sync presentation", function()
+                return SessionBox:CreateButton({
+                    Name = "Sync Client UI",
+                    Icon = Icon("sync", "Material"),
+                    Tooltip = "Re-apply the current EXECO values to the visible game interface.",
+                    Callback = function()
+                        SyncVisualCurrenciesToNativeState()
+                        SyncAllDisplays()
+                        Starlight:Notification({
+                            Title = "EXECO",
+                            Icon = Icon("check", "Material"),
+                            Content = "Client UI synchronized."
+                        }, "EXECO_SyncNotice")
+                    end
+                }, "EXECO_SyncUI")
+            end)
 
-    SafeUI("Resource actions section", function() return FeaturesTab:CreateSection("Quick Actions") end)
-    SafeUI("Sync resources button", function()
-        return FeaturesTab:CreateButton({
-            Name = "Sync Resource Displays",
-            Description = "Re-apply current EXECO values to the game's visible HUD.",
-            Callback = function()
-                SyncVisualCurrenciesToNativeState()
-                SyncAllDisplays()
-                Luna:Notification({
-                    Title = "EXECO",
-                    Icon = "sync",
-                    ImageSource = "Material",
-                    Content = "Resource displays synchronized."
-                })
-            end
-        })
-    end)
+            SafeUI("save mock state", function()
+                return SessionBox:CreateButton({
+                    Name = "Save Mock State",
+                    Icon = Icon("save", "Material"),
+                    Callback = function()
+                        local ok = SavePersistentState and pcall(SavePersistentState)
+                        Starlight:Notification({
+                            Title = "EXECO",
+                            Icon = Icon(ok and "check" or "error", "Material"),
+                            Content = ok and "Mock state saved." or "Could not save mock state."
+                        }, "EXECO_SaveNotice")
+                    end
+                }, "EXECO_SaveState")
+            end)
 
+            SafeUI("rejoin server", function()
+                return SessionBox:CreateButton({
+                    Name = "Rejoin Server",
+                    Icon = Icon("refresh", "Material"),
+                    Tooltip = "Save state and reconnect to the current server.",
+                    Callback = function()
+                        QueuePersistentSave()
+                        if SavePersistentState then pcall(SavePersistentState) end
+                        if not QueueBlackSigilForTeleport() then
+                            warn("[EXECO] Auto-execute could not be queued")
+                        end
+                        task.wait(0.15)
+                        TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
+                    end
+                }, "EXECO_Rejoin")
+            end)
+        end
+    end
+
+    -- Resources: value controls only, split evenly across two columns.
+    if ResourcesTab then
+        local CurrencyBox = SafeUI("currency groupbox", function()
+            return ResourcesTab:CreateGroupbox({
+                Name = "Currency",
+                Icon = Icon("payments", "Material"),
+                Column = 1
+            }, "EXECO_CurrencyBox")
+        end)
+
+        local RerollBox = SafeUI("reroll resource groupbox", function()
+            return ResourcesTab:CreateGroupbox({
+                Name = "Traits",
+                Icon = Icon("autorenew", "Material"),
+                Column = 2
+            }, "EXECO_RerollBox")
+        end)
+
+        if CurrencyBox then
+            SafeUI("gems slider", function()
+                return CurrencyBox:CreateSlider({
+                    Name = "Gems",
+                    Icon = Icon("diamond", "Material"),
+                    Range = {0, 1000000},
+                    Increment = 1,
+                    CurrentValue = math.clamp(VisualState.Gems, 0, 1000000),
+                    Callback = function(value)
+                        VisualState.Gems = math.floor(tonumber(value) or 0)
+                        local ok, err = SetLocalItemAmount("Gem", VisualState.Gems)
+                        if not ok then warn("[EXECO] Gem slider sync warning:", err) end
+                        SyncAllDisplays()
+                        QueuePersistentSave()
+                    end
+                }, "EXECO_Gems")
+            end)
+
+            SafeUI("gold slider", function()
+                return CurrencyBox:CreateSlider({
+                    Name = "Gold",
+                    Icon = Icon("paid", "Material"),
+                    Range = {0, 10000000},
+                    Increment = 1,
+                    CurrentValue = math.clamp(VisualState.Gold, 0, 10000000),
+                    Callback = function(value)
+                        VisualState.Gold = math.floor(tonumber(value) or 0)
+                        SyncAllDisplays()
+                        QueuePersistentSave()
+                    end
+                }, "EXECO_Gold")
+            end)
+        end
+
+        if RerollBox then
+            SafeUI("trait rerolls slider", function()
+                return RerollBox:CreateSlider({
+                    Name = "Trait Rerolls",
+                    Icon = Icon("casino", "Material"),
+                    Range = {0, 100000},
+                    Increment = 1,
+                    CurrentValue = math.clamp(VisualState.TraitRerolls, 0, 100000),
+                    Callback = function(value)
+                        VisualState.TraitRerolls = math.floor(tonumber(value) or 0)
+                        local ok, err = SetLocalItemAmount(GetTraitRerollItemName(), VisualState.TraitRerolls)
+                        if not ok then warn("[EXECO] Reroll slider sync warning:", err) end
+                        SyncAllDisplays()
+                        QueuePersistentSave()
+                    end
+                }, "EXECO_TraitRerolls")
+            end)
+
+            SafeUI("refresh traits", function()
+                return RerollBox:CreateButton({
+                    Name = "Refresh Trait Database",
+                    Icon = Icon("refresh", "Material"),
+                    Callback = function()
+                        local ok, result = RefreshTraitDatabase(false)
+                        Starlight:Notification({
+                            Title = "EXECO",
+                            Icon = Icon(ok and "check" or "error", "Material"),
+                            Content = ok and ("Loaded " .. tostring(result) .. " live traits.") or ("Trait refresh failed: " .. tostring(result))
+                        }, "EXECO_TraitRefreshNotice")
+                    end
+                }, "EXECO_RefreshTraits")
+            end)
+        end
+    end
+
+    -- Rollback: no explanatory filler, only the two actual feature switches.
     if RollbackTab then
-        SafeUI("Rollback intro", function()
-            return RollbackTab:CreateParagraph({
-                Title = "Local Rollback Engine",
-                Text = "Enable only the systems you want EXECO to intercept locally. Trait and banner behavior remain separate for easier control."
-            })
-        end)
-        SafeUI("Rollback section", function() return RollbackTab:CreateSection("Feature Toggles") end)
-
-        SafeUI("Trait rollback toggle", function()
-            return RollbackTab:CreateToggle({
-                Name = "Trait Reroll Rollback",
-                Description = "Intercept supported trait rerolls and apply EXECO's local mock result.",
-                CurrentValue = _G.AVTraitRollback == true,
-                Callback = function(value)
-                    _G.AVTraitRollback = value == true
-                    SafeLog("Trait Rerolls", _G.AVTraitRollback and "Enabled" or "Disabled")
-                end
-            }, "EXECO_TraitRollback")
+        local TraitBox = SafeUI("trait rollback groupbox", function()
+            return RollbackTab:CreateGroupbox({
+                Name = "Trait Rerolls",
+                Icon = Icon("autorenew", "Material"),
+                Column = 1
+            }, "EXECO_TraitRollbackBox")
         end)
 
-        SafeUI("Banner rollback toggle", function()
-            return RollbackTab:CreateToggle({
-                Name = "Banner Summon Rollback",
-                Description = "Intercept supported banner summons and use EXECO's local summon engine.",
-                CurrentValue = _G.AVSummonRollback == true,
-                Callback = function(value)
-                    _G.AVSummonRollback = value == true
-                    SafeLog("Banner Summons", _G.AVSummonRollback and "Enabled" or "Disabled")
-                end
-            }, "EXECO_BannerRollback")
+        local BannerBox = SafeUI("banner rollback groupbox", function()
+            return RollbackTab:CreateGroupbox({
+                Name = "Banner Summons",
+                Icon = Icon("auto_awesome", "Material"),
+                Column = 2
+            }, "EXECO_BannerRollbackBox")
         end)
 
-        SafeUI("Engine section", function() return RollbackTab:CreateSection("Engine") end)
-        SafeUI("Refresh traits button", function()
-            return RollbackTab:CreateButton({
-                Name = "Refresh Live Trait Database",
-                Description = "Reload traits from the game's current MockTraits module.",
-                Callback = function()
-                    local ok, result = RefreshTraitDatabase(false)
-                    Luna:Notification({
-                        Title = "EXECO",
-                        Icon = ok and "check_circle" or "error",
-                        ImageSource = "Material",
-                        Content = ok and ("Loaded " .. tostring(result) .. " live traits.") or ("Trait refresh failed: " .. tostring(result))
-                    })
-                end
-            })
+        if TraitBox then
+            SafeUI("trait rollback toggle", function()
+                return TraitBox:CreateToggle({
+                    Name = "Enable Trait Rollback",
+                    Icon = Icon("history", "Material"),
+                    CurrentValue = _G.AVTraitRollback == true,
+                    Style = 2,
+                    Callback = function(value)
+                        _G.AVTraitRollback = value == true
+                        SafeLog("Trait Rerolls", _G.AVTraitRollback and "Enabled" or "Disabled")
+                    end
+                }, "EXECO_TraitRollback")
+            end)
+        end
+
+        if BannerBox then
+            SafeUI("banner rollback toggle", function()
+                return BannerBox:CreateToggle({
+                    Name = "Enable Banner Rollback",
+                    Icon = Icon("history", "Material"),
+                    CurrentValue = _G.AVSummonRollback == true,
+                    Style = 2,
+                    Callback = function(value)
+                        _G.AVSummonRollback = value == true
+                        SafeLog("Banner Summons", _G.AVSummonRollback and "Enabled" or "Disabled")
+                    end
+                }, "EXECO_BannerRollback")
+            end)
+        end
+    end
+
+    if SettingsTab then
+        local DataBox = SafeUI("data groupbox", function()
+            return SettingsTab:CreateGroupbox({
+                Name = "Data",
+                Icon = Icon("database", "Lucide"),
+                Column = 1
+            }, "EXECO_DataBox")
+        end)
+
+        if DataBox then
+            SafeUI("delete mock data", function()
+                return DataBox:CreateButton({
+                    Name = "Delete Mock Data",
+                    Icon = Icon("delete", "Material"),
+                    Tooltip = "Clear all EXECO mock units, histories, pity values, equipped slots and saved local mock state.",
+                    Style = 2,
+                    Callback = function()
+                        local function performDelete()
+                            DeleteAllMockData()
+                            Starlight:Notification({
+                                Title = "EXECO",
+                                Icon = Icon("check", "Material"),
+                                Content = "Mock data deleted."
+                            }, "EXECO_DeleteNotice")
+                        end
+
+                        local dialog = SafeUI("delete confirmation", function()
+                            return Window:PromptDialog({
+                                Name = "Delete Mock Data?",
+                                Content = "This clears all saved EXECO mock state for this script.",
+                                Type = 1,
+                                Actions = {
+                                    Primary = {
+                                        Name = "Delete",
+                                        Icon = Icon("delete", "Material"),
+                                        Callback = performDelete
+                                    },
+                                    {
+                                        Name = "Cancel"
+                                    }
+                                }
+                            })
+                        end)
+
+                        if not dialog then
+                            performDelete()
+                        end
+                    end
+                }, "EXECO_DeleteMockData")
+            end)
+        end
+
+        -- Starlight's built-in appearance and config controls.
+        SafeUI("theme groupbox", function()
+            return SettingsTab:BuildThemeGroupbox(1)
+        end)
+        SafeUI("config groupbox", function()
+            return SettingsTab:BuildConfigGroupbox(2)
         end)
     end
 
-    if SessionTab then
-        SafeUI("Session intro", function()
-            return SessionTab:CreateParagraph({
-                Title = "Session Management",
-                Text = "Save mock state, refresh the current presentation, or reconnect while preserving EXECO's local state."
-            })
-        end)
-        SafeUI("Session section", function() return SessionTab:CreateSection("Current Session") end)
-
-        SafeUI("Save state button", function()
-            return SessionTab:CreateButton({
-                Name = "Save Mock State Now",
-                Description = "Immediately write the current EXECO mock state to disk.",
-                Callback = function()
-                    local ok = SavePersistentState and pcall(SavePersistentState)
-                    Luna:Notification({
-                        Title = "EXECO",
-                        Icon = ok and "save" or "error",
-                        ImageSource = "Material",
-                        Content = ok and "Mock state saved." or "Could not save mock state."
-                    })
-                end
-            })
-        end)
-
-        SafeUI("Refresh presentation button", function()
-            return SessionTab:CreateButton({
-                Name = "Refresh Client Presentation",
-                Description = "Re-sync currencies, pity counters, inventory count, and visible HUD values.",
-                Callback = function()
-                    SyncVisualCurrenciesToNativeState()
-                    SyncAllDisplays()
-                    Luna:Notification({
-                        Title = "EXECO",
-                        Icon = "refresh",
-                        ImageSource = "Material",
-                        Content = "Client presentation refreshed."
-                    })
-                end
-            })
-        end)
-
-        SafeUI("Rejoin button", function()
-            return SessionTab:CreateButton({
-                Name = "Rejoin Current Server",
-                Description = "Save current state, queue EXECO for teleport, and reconnect to this server.",
-                Callback = function()
-                    QueuePersistentSave()
-                    if SavePersistentState then pcall(SavePersistentState) end
-                    if not QueueBlackSigilForTeleport() then warn("[EXECO] Auto-execute could not be queued") end
-                    task.wait(0.15)
-                    TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
-                end
-            })
-        end)
-    end
-
-    SafeUI("Settings intro", function()
-        return SettingsTab:CreateParagraph({
-            Title = "EXECO Settings",
-            Text = "Manage saved mock data and Luna appearance/configuration from one place."
-        })
+    -- Load user appearance/config only after all indexed elements have been built.
+    SafeUI("autoload theme", function()
+        if type(Starlight.LoadAutoloadTheme) == "function" then
+            Starlight:LoadAutoloadTheme()
+        end
     end)
-    SafeUI("Data section", function() return SettingsTab:CreateSection("Data") end)
-
-    SafeUI("Delete data button", function()
-        return SettingsTab:CreateButton({
-            Name = "Delete All Mock Data",
-            Description = "Clear saved mock units, histories, pity values, equipped mock slots, and local mock resources.",
-            Callback = function()
-                DeleteAllMockData()
-                Luna:Notification({
-                    Title = "EXECO",
-                    Icon = "check_circle",
-                    ImageSource = "Material",
-                    Content = "Mock data cleared."
-                })
-            end
-        })
-    end)
-
-    -- Built-in Luna configuration and appearance controls from the supplied docs.
-    SafeUI("Config section", function() return SettingsTab:BuildConfigSection() end)
-    SafeUI("Theme section", function() return SettingsTab:BuildThemeSection() end)
-
-    -- Autoload only after all flagged controls exist.
-    SafeUI("Autoload config", function()
-        if type(Luna.LoadAutoloadConfig) == "function" then
-            Luna:LoadAutoloadConfig()
+    SafeUI("autoload config", function()
+        if type(Starlight.LoadAutoloadConfig) == "function" then
+            Starlight:LoadAutoloadConfig()
         end
     end)
 
-    Luna:Notification({
-        Title = "EXECO",
-        Icon = "verified",
-        ImageSource = "Material",
-        Content = "Dashboard, resources, rollback, session, and settings loaded."
-    })
+    SafeUI("loaded notification", function()
+        return Starlight:Notification({
+            Title = "EXECO",
+            Icon = Icon("check_circle", "Material"),
+            Content = "Interface ready."
+        }, "EXECO_LoadedNotice")
+    end)
 end
 
 -- TraitReroll is created lazily. Do not change mock hotbar mount/equip state
@@ -3521,9 +3637,9 @@ SafeLog("Hotbar", "v15 native visuals; 1s rejoin boot + lazy safe native-module 
 SafeLog("Pity", "Summon pity 50/400/10000; trait pity Draconic 300 / Forsaken 500 / Primordial 750 / Unbound 1500")
 SafeLog("State", "Using leaf ItemData Values + PlayerData.HotbarData backing state")
 
--- Rejoin auto-execution is silent by construction: Luna is never loaded.
+-- Rejoin auto-execution is silent by construction: Starlight is never loaded.
 
 print(string.format(
-    "EXECO - Anime Expeditions (Luna Edition) initialized with %d live traits and banner summon support.",
+    "EXECO - Anime Expeditions (Starlight Edition) initialized with %d live traits and banner summon support.",
     #TraitDatabase
 ))
