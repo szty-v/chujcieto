@@ -372,6 +372,10 @@ end
 -- the player's real currency/resource state and labels untouched.
 local PrivateControlsEnabled = false
 local PrivateDisplayOriginals = setmetatable({}, { __mode = "k" })
+-- Slider positions are buffered separately while Persistence Exploit is off.
+-- This prevents Cascade slider initialization/movement from touching the
+-- actual spoof state or the game's native/local currency values.
+local PrivatePendingValues = nil
 
 -- Across rejoin/new execution, disk state wins over an empty/new Lua environment.
 if type(PersistedSnapshot) == "table" and type(PersistedSnapshot.VisualState) == "table" then
@@ -400,6 +404,12 @@ if VisualState.TraitPity.Draconic == nil then VisualState.TraitPity.Draconic = 0
 if VisualState.TraitPity.Forsaken == nil then VisualState.TraitPity.Forsaken = 0 end
 if VisualState.TraitPity.Primordial == nil then VisualState.TraitPity.Primordial = 0 end
 if VisualState.TraitPity.Unbound == nil then VisualState.TraitPity.Unbound = 0 end
+
+PrivatePendingValues = {
+    Gems = math.max(0, math.floor(tonumber(VisualState.Gems) or 0)),
+    Gold = math.max(0, math.floor(tonumber(VisualState.Gold) or 0)),
+    TraitRerolls = math.max(0, math.floor(tonumber(VisualState.TraitRerolls) or 0)),
+}
 
 -- Normal trait history is capped at 50 entries.
 while #VisualState.TraitHistory > 50 do
@@ -659,6 +669,13 @@ local function SyncTraitPityDisplays()
     end)
 end
 
+local function FormatWholeNumber(value)
+    local number = math.max(0, math.floor(tonumber(value) or 0))
+    local text = tostring(number)
+    local formatted = text:reverse():gsub("(%d%d%d)", "%1,"):reverse()
+    return formatted:gsub("^,", "")
+end
+
 local function SetPrivateDisplayText(label, text)
     if not label or not label:IsA("TextLabel") then
         return
@@ -681,13 +698,13 @@ end
 local function SyncAllDisplays()
     pcall(function()
         if PrivateControlsEnabled then
-            SetPrivateDisplayText(UIPaths.BottomHUD_Gems(), string.format("%d", VisualState.Gems))
-            SetPrivateDisplayText(UIPaths.SummonGems(), string.format("%d", VisualState.Gems))
-            SetPrivateDisplayText(UIPaths.BottomHUD_TraitCount1(), string.format("%d", VisualState.TraitRerolls))
-            SetPrivateDisplayText(UIPaths.BottomHUD_TraitCount2(), string.format("%d", VisualState.TraitRerolls))
-            SetPrivateDisplayText(UIPaths.RerollMenuCount(), string.format("%d", VisualState.TraitRerolls))
-            SetPrivateDisplayText(UIPaths.TraitRerollExactCount(), string.format("%d", VisualState.TraitRerolls))
-            SetPrivateDisplayText(UIPaths.BottomHUD_Gold(), string.format("%d", VisualState.Gold))
+            SetPrivateDisplayText(UIPaths.BottomHUD_Gems(), FormatWholeNumber(VisualState.Gems))
+            SetPrivateDisplayText(UIPaths.SummonGems(), FormatWholeNumber(VisualState.Gems))
+            SetPrivateDisplayText(UIPaths.BottomHUD_TraitCount1(), FormatWholeNumber(VisualState.TraitRerolls))
+            SetPrivateDisplayText(UIPaths.BottomHUD_TraitCount2(), FormatWholeNumber(VisualState.TraitRerolls))
+            SetPrivateDisplayText(UIPaths.RerollMenuCount(), FormatWholeNumber(VisualState.TraitRerolls))
+            SetPrivateDisplayText(UIPaths.TraitRerollExactCount(), FormatWholeNumber(VisualState.TraitRerolls))
+            SetPrivateDisplayText(UIPaths.BottomHUD_Gold(), FormatWholeNumber(VisualState.Gold))
         end
 
         SyncPityDisplays()
@@ -1324,7 +1341,7 @@ end
 
 local function SyncTraitRerollCountDirect(previousAmount)
     if not PrivateControlsEnabled then return end
-    local wanted = tostring(math.max(0, math.floor(tonumber(VisualState.TraitRerolls) or 0)))
+    local wanted = FormatWholeNumber(VisualState.TraitRerolls)
 
     -- Primary exact path supplied from the live TraitReroll GUI.
     local exact = UIPaths.TraitRerollExactCount()
@@ -1342,6 +1359,7 @@ local function SyncTraitRerollCountDirect(previousAmount)
         and rerollGui.Frame.Folder:FindFirstChild("Overlay")
 
     if overlay then
+        local wantedRaw = wanted:gsub(",", "")
         local previousText = previousAmount ~= nil and tostring(math.floor(tonumber(previousAmount) or 0)) or nil
 
         for _, obj in ipairs(overlay:GetDescendants()) do
@@ -1351,7 +1369,7 @@ local function SyncTraitRerollCountDirect(previousAmount)
 
                 if numericOnly then
                     local stripped = currentText:gsub(",", ""):gsub("%s+", "")
-                    if stripped == wanted or (previousText and stripped == previousText) then
+                    if stripped == wantedRaw or (previousText and stripped == previousText) then
                         obj.Text = wanted
                     end
                 end
@@ -3465,7 +3483,7 @@ end))
 -- ================================
 -- UI: CASCADE
 -- ================================
-local function AddCascadeNumberField(form, title, subtitle, value, onChanged)
+local function AddCascadeSlider(form, title, subtitle, value, minimum, maximum, onChanged)
     local row = form:Row({
         SearchIndex = title,
     })
@@ -3475,36 +3493,13 @@ local function AddCascadeNumberField(form, title, subtitle, value, onChanged)
         Subtitle = subtitle,
     })
 
-    local acceptedText = tostring(math.max(0, math.floor(tonumber(value) or 0)))
-    local restoring = false
-
-    return row:Right():TextField({
-        Value = acceptedText,
-        Placeholder = "Enter amount",
+    return row:Right():Slider({
+        Value = value,
+        Minimum = minimum,
+        Maximum = maximum,
         ValueChanged = function(self, newValue)
-            if restoring then
-                return
-            end
-
-            local text = tostring(newValue or "")
-            local numeric = tonumber(text:gsub(",", ""))
-
-            -- The field itself is always editable, but no EXECO value/state/UI
-            -- mutation is allowed until the persistence exploit is enabled.
-            if not PrivateControlsEnabled then
-                restoring = true
-                self.Value = acceptedText
-                restoring = false
-                return
-            end
-
-            if numeric == nil then
-                return
-            end
-
-            local amount = math.max(0, math.floor(numeric))
-            acceptedText = tostring(amount)
-            onChanged(amount)
+            local amount = math.max(minimum, math.min(maximum, math.floor(tonumber(newValue) or minimum)))
+            onChanged(amount, PrivateControlsEnabled)
         end,
     })
 end
@@ -3585,13 +3580,20 @@ do
     AddCascadeToggle(
         controlForm,
         "Enable Persistance Exploit",
-        "Allow the fields below to modify values.",
+        "Allow the private sliders below to modify local values.",
         PrivateControlsEnabled,
         function(value)
             if value == PrivateControlsEnabled then return end
 
             if value then
                 CapturePrivateCurrencyBaseline()
+
+                -- Commit the preview-only slider positions only now. Before this
+                -- point they never touch VisualState or native/local item values.
+                VisualState.Gems = PrivatePendingValues.Gems
+                VisualState.Gold = PrivatePendingValues.Gold
+                VisualState.TraitRerolls = PrivatePendingValues.TraitRerolls
+
                 PrivateControlsEnabled = true
                 SyncVisualCurrenciesToNativeState()
                 SyncAllDisplays()
@@ -3606,47 +3608,56 @@ do
 
     local currencyForm = PersistenceTab:PageSection({
         Title = "Currency & Resources",
-        Subtitle = "These fields only apply while Persistence Exploit is enabled.",
+        Subtitle = "Sliders preview values while disabled and apply only after Persistence Exploit is enabled.",
     }):Form()
 
-    AddCascadeNumberField(
+    AddCascadeSlider(
         currencyForm,
         "Gems",
         "Set your gem amount.",
-        VisualState.Gems,
-        function(value)
-            if not PrivateControlsEnabled then return end
+        math.clamp(PrivatePendingValues.Gems, 0, 1000000),
+        0,
+        1000000,
+        function(value, enabled)
+            PrivatePendingValues.Gems = value
+            if not enabled then return end
             VisualState.Gems = value
             local ok, err = SetLocalItemAmount("Gem", VisualState.Gems)
-            if not ok then warn("[EXECO] Gem field sync warning:", err) end
+            if not ok then warn("[EXECO] Gem slider sync warning:", err) end
             SyncAllDisplays()
             QueuePersistentSave()
         end
     )
 
-    AddCascadeNumberField(
+    AddCascadeSlider(
         currencyForm,
         "Gold",
         "Set your gold amount.",
-        VisualState.Gold,
-        function(value)
-            if not PrivateControlsEnabled then return end
+        math.clamp(PrivatePendingValues.Gold, 0, 10000000),
+        0,
+        10000000,
+        function(value, enabled)
+            PrivatePendingValues.Gold = value
+            if not enabled then return end
             VisualState.Gold = value
             SyncAllDisplays()
             QueuePersistentSave()
         end
     )
 
-    AddCascadeNumberField(
+    AddCascadeSlider(
         currencyForm,
         "Trait Rerolls",
         "Set your trait reroll amount.",
-        VisualState.TraitRerolls,
-        function(value)
-            if not PrivateControlsEnabled then return end
+        math.clamp(PrivatePendingValues.TraitRerolls, 0, 100000),
+        0,
+        100000,
+        function(value, enabled)
+            PrivatePendingValues.TraitRerolls = value
+            if not enabled then return end
             VisualState.TraitRerolls = value
             local ok, err = SetLocalItemAmount(GetTraitRerollItemName(), VisualState.TraitRerolls)
-            if not ok then warn("[EXECO] Reroll field sync warning:", err) end
+            if not ok then warn("[EXECO] Reroll slider sync warning:", err) end
             SyncAllDisplays()
             QueuePersistentSave()
         end
