@@ -191,9 +191,12 @@ Window:CreateHomeTab({
     },
 })
 
-local Watermark = Window:Watermark({
-    Desc = "{NAME} | {TIME} | {FPS} FPS | {MS} ms",
-})
+local Watermark = nil
+if not __BLACKSIGIL_TELEPORT_BOOT then
+    Watermark = Window:Watermark({
+        Desc = "{NAME} | {TIME} | {FPS} FPS | {MS} ms",
+    })
+end
 
 local FeaturesTab = Window:AddTab({
     Name = "Features",
@@ -286,6 +289,8 @@ local UIPaths = {
 
 -- ================================
 -- PERSISTENT MOCK STORAGE
+local MockUnitIDs
+
 local function GetUnitInventoryCountLabel()
     return SafeGet(
         PlayerGui,
@@ -300,20 +305,29 @@ local function SyncUnitInventoryCount()
         return
     end
 
-    local units = GetNativeUnitDataSnapshot and GetNativeUnitDataSnapshot() or nil
-    if type(units) ~= "table" then
-        local ok, root = pcall(Fusion.peek, PlayerDataState)
-        units = ok and type(root) == "table" and root.UnitData or nil
-    end
-
-    local count = 0
-    if type(units) == "table" then
-        for _ in pairs(units) do
-            count += 1
+    -- Count real units from PlayerData and mock units from our own registry.
+    -- Mock units are not guaranteed to be visible in PlayerData.UnitData at the
+    -- exact frame the inventory counter is repainted, so relying on UnitData
+    -- alone left the native label stuck at e.g. 1/100.
+    local realCount = 0
+    local ok, root = pcall(Fusion.peek, PlayerDataState)
+    if ok and type(root) == "table" and type(root.UnitData) == "table" then
+        for unitID, unitData in pairs(root.UnitData) do
+            local isMock = MockUnitIDs and MockUnitIDs[unitID]
+            if not isMock and not (type(unitData) == "table" and unitData.BLACKSIGILMock == true) then
+                realCount += 1
+            end
         end
     end
 
-    label.Text = string.format("%d/100", math.clamp(count, 0, 100))
+    local mockCount = 0
+    if type(MockUnitIDs) == "table" then
+        for _ in pairs(MockUnitIDs) do
+            mockCount += 1
+        end
+    end
+
+    label.Text = string.format("%d/100", math.clamp(realCount + mockCount, 0, 100))
 end
 
 -- ================================
@@ -368,7 +382,7 @@ PersistedSnapshot = ReadPersistentSnapshot()
 -- ================================
 -- SPOOF STATE & TOGGLES
 -- ================================
-local MockUnitIDs = {}
+MockUnitIDs = {}
 
 local VisualState = _G.BLACKSIGIL_VISUAL_STATE
 if type(VisualState) ~= "table" then
@@ -2708,12 +2722,11 @@ local function MountMockNativeSlot(unitID, slot)
                     task.wait()
 
                     while MockEquippedSlots[unitID] == slot and IsTraitRerollBlockingHotbar() do
-                        task.wait(0.1)
+                        task.wait(0.02)
                     end
 
                     if MockEquippedSlots[unitID] == slot then
-                        -- Give BottomHUD one frame to restore its native anchor.
-                        task.wait()
+                        -- Mount as soon as BottomHUD recreates the native slot.
                         local ok, mounted, err = pcall(MountMockNativeSlot, unitID, slot)
                         if not ok then
                             warn("[EXECO] Native hotbar remount failed:", mounted)
@@ -3443,13 +3456,15 @@ dataSection:AddButton({
     end,
 })
 
-pcall(function()
-    Window:Notify({
-        Title = "EXECO",
-        Content = "Features loaded successfully.",
-        Duration = 4
-    })
-end)
+if not __BLACKSIGIL_TELEPORT_BOOT then
+    pcall(function()
+        Window:Notify({
+            Title = "EXECO",
+            Content = "Features loaded successfully.",
+            Duration = 4
+        })
+    end)
+end
 
 -- TraitReroll is created lazily. Do not change mock hotbar mount/equip state
 -- when this menu opens; the native HUD can hide visually without us destroying
@@ -3510,6 +3525,11 @@ SafeLog("Currency", "Native client affordability mirrors enabled")
 SafeLog("Hotbar", "v15 native visuals; 1s rejoin boot + lazy safe native-module mount")
 SafeLog("Pity", "Summon pity 50/400/10000; trait pity Draconic 300 / Forsaken 500 / Primordial 750 / Unbound 1500")
 SafeLog("State", "Using leaf ItemData Values + PlayerData.HotbarData backing state")
+
+-- Rejoin auto-execution is silent: restore state, then leave the menu closed.
+if __BLACKSIGIL_TELEPORT_BOOT then
+    pcall(function() Window:Close() end)
+end
 
 print(string.format(
     "EXECO - Anime Expeditions (ModernV2 Edition) initialized with %d live traits and banner summon support.",
