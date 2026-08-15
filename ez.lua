@@ -156,22 +156,56 @@ local SharedUtils = require(SharedFolder:WaitForChild("Utils"))
 -- ================================
 local Window = ModernV2:Window({
     Title = "BLACKSIGIL",
+    AlwaysShowTab = false,
     Content = "Anime Vanguards",
+    Image = "lucide:shield",
     Color = Color3.fromRGB(78, 127, 252),
-    Config = {
-        ConfigFolder = "BLACKSIGIL",
-        AutoSave = true
+    Uitransparent = 0.12,
+    ShowUser = true,
+    NewElements = true,
+})
+
+Window:CreateHomeTab({
+    Name = "Dashboard",
+    Icon = "lucide:layout-dashboard",
+    Content = "BLACKSIGIL",
+    Segments = {
+        Details = {
+            Text = "Features",
+            Icon = "lucide:grid-2x2",
+            Description = {
+                Title = "BLACKSIGIL",
+                Date = "Current Session",
+                Content = "Banner summons, trait rerolls, inventory, equip and hotbar integration."
+            },
+        },
+        Script = {
+            Text = "Session",
+            Icon = "lucide:code",
+            Description = {
+                Title = "Session",
+                Date = "Current Session",
+                Content = "Saved mock data and equipped units are restored automatically."
+            },
+        },
     },
+})
+
+local Watermark = Window:Watermark({
+    Desc = "{NAME} | {TIME} | {FPS} FPS | {MS} ms",
 })
 
 local FeaturesTab = Window:AddTab({
     Name = "Features",
-    Icon = "sparkles"
+    Icon = "lucide:sparkles",
+    Type = "Double"
 })
 
 local SettingsTab = Window:AddTab({
     Name = "Settings",
-    Icon = "settings"
+    Icon = "lucide:settings",
+    Type = "Double",
+    Border = true
 })
 
 -- ================================
@@ -3233,7 +3267,10 @@ end))
 -- ================================
 -- UI: FEATURES
 -- ================================
-local currencySection = FeaturesTab:AddSection({ Name = "CURRENCY & RESOURCES" })
+local currencySection = FeaturesTab:AddSection({
+    Name = "Currency & Resources",
+    Position = "Left"
+})
 
 currencySection:AddSlider({
     Name = "Gems",
@@ -3278,10 +3315,14 @@ currencySection:AddSlider({
     end,
 })
 
-local featureSection = FeaturesTab:AddSection({ Name = "FEATURES" })
+local featureSection = FeaturesTab:AddSection({
+    Name = "Features",
+    Position = "Right"
+})
 
 featureSection:AddToggle({
     Name = "Trait Rerolls",
+    Tags = { { Title = "FEATURE", Color = "#4e7ffc" } },
     Default = _G.AVTraitRollback,
     Flag = "BlackSigilTraitEnabled",
     Callback = function(value)
@@ -3292,6 +3333,7 @@ featureSection:AddToggle({
 
 featureSection:AddToggle({
     Name = "Banner Summons",
+    Tags = { { Title = "FEATURE", Color = "#4e7ffc" } },
     Default = _G.AVSummonRollback,
     Flag = "BlackSigilBannerEnabled",
     Callback = function(value)
@@ -3351,7 +3393,10 @@ featureSection:AddButton({
 -- ================================
 -- UI: SETTINGS
 -- ================================
-local dataSection = SettingsTab:AddSection({ Name = "DATA MANAGEMENT" })
+local dataSection = SettingsTab:AddSection({
+    Name = "Data Management",
+    Position = "Center"
+})
 
 dataSection:AddButton({
     Name = "Delete All Mock Data",
@@ -3370,7 +3415,7 @@ dataSection:AddButton({
 pcall(function()
     Window:Notify({
         Title = "BLACKSIGIL",
-        Content = "Loaded successfully.",
+        Content = "Features loaded successfully.",
         Duration = 4
     })
 end)
