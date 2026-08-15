@@ -3585,7 +3585,7 @@ do
     AddCascadeToggle(
         controlForm,
         "Enable Persistance Exploit",
-        "Allow the private fields below to modify local values.",
+        "Allow the fields below to modify values.",
         PrivateControlsEnabled,
         function(value)
             if value == PrivateControlsEnabled then return end
