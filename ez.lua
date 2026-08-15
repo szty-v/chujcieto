@@ -1983,12 +1983,34 @@ local function DeductLocalBannerCurrency(root, bannerSnapshot, amount)
     end
 
     if currency == "Gem" then
-        VisualState.Gems = math.max(0, VisualState.Gems - totalCost)
-
         if PrivateControlsEnabled then
+            -- Persistence exploit enabled: spend from the spoofed/private Gem pool.
+            VisualState.Gems = math.max(0, VisualState.Gems - totalCost)
+
             local ok, err = SetLocalItemAmount("Gem", VisualState.Gems)
             if not ok then
                 warn("[EXECO] Gem spend warning:", err)
+            end
+        else
+            -- Persistence exploit disabled: rollback is still a visual/local summon,
+            -- but it must consume the player's CURRENT local Gem amount rather than
+            -- EXECO's dormant spoofed VisualState.Gems value.
+            local gemRecord = ReadLocalItemRecord("Gem")
+            local currentAmount = type(gemRecord) == "table" and tonumber(
+                gemRecord.Amount
+                or gemRecord.Value
+                or gemRecord.Count
+                or gemRecord.Quantity
+            ) or nil
+
+            if currentAmount ~= nil then
+                local remaining = math.max(0, math.floor(currentAmount - totalCost))
+                local ok, err = SetLocalItemAmount("Gem", remaining)
+                if not ok then
+                    warn("[EXECO] Real Gem spend warning:", err)
+                end
+            else
+                warn("[EXECO] Unable to read current Gem amount for rollback spend")
             end
         end
     end
