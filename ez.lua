@@ -1,5 +1,5 @@
 --[[
-    EXECO - Anime Expeditions (WindUI Interface Edition)
+    EXECO - Anime Expeditions (Luna Interface Edition)
     Trait + Banner Feature Engine - Native Fusion Edition
 
     This build keeps the existing feature behavior while
@@ -33,16 +33,10 @@ end
 WaitForTeleportBootStability()
 
 -- ================================
--- WINDUI INITIALIZATION
+-- LUNA INITIALIZATION
 -- ================================
--- Important: on a queued teleport/rejoin boot we do not fetch WindUI and we do
--- not create any ScreenGui at all. The feature/state engine still restores in
--- the background, so rejoin startup is genuinely silent instead of opening and
--- immediately closing a window.
-local WindUI = nil
-local Window = nil
-local FeaturesTab = nil
-local SettingsTab = nil
+-- Rejoin boots are headless. Luna is not fetched or constructed at all.
+local Luna, Window, FeaturesTab, SettingsTab
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -50,73 +44,33 @@ local TeleportService = game:GetService("TeleportService")
 local HttpService = game:GetService("HttpService")
 local StarterPlayer = game:GetService("StarterPlayer")
 local LocalPlayer = Players.LocalPlayer
-
--- Set this to the raw URL hosting this EXECO build for rejoin auto-execution.
 local EXECO_RAW_URL = "https://raw.githubusercontent.com/szty-v/chujcieto/refs/heads/main/ez.lua"
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
 if not __BLACKSIGIL_TELEPORT_BOOT then
     local ok, result = pcall(function()
-        return loadstring(game:HttpGet(
-            "https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua"
-        ))()
+        return loadstring(game:HttpGet("https://raw.githubusercontent.com/Nebula-Softworks/Luna-Interface-Suite/refs/heads/master/source.lua"))()
     end)
-
     if not ok or type(result) ~= "table" then
-        warn("[EXECO] Failed to load WindUI:", result)
+        warn("[EXECO] Failed to load Luna:", result)
         return
     end
 
-    WindUI = result
-    Window = WindUI:CreateWindow({
-        Title = "EXECO",
-        Author = "Anime Expeditions",
-        Folder = "EXECO",
-        Icon = "shield",
-        Theme = "Dark",
-        Size = UDim2.fromOffset(680, 470),
-        MinSize = Vector2.new(580, 380),
-        MaxSize = Vector2.new(860, 600),
-        Resizable = true,
-        AutoScale = true,
-        NewElements = true,
-        HideSearchBar = true,
-        SideBarWidth = 190,
-        ToggleKey = Enum.KeyCode.RightShift,
-        Topbar = {
-            Height = 46,
-            ButtonsType = "Mac",
-        },
-        OpenButton = {
-            Title = "EXECO",
-            Enabled = true,
-            Draggable = true,
-            OnlyMobile = false,
-            Scale = 0.55,
-        },
-        User = {
-            Enabled = false,
-        },
+    Luna = result
+    Window = Luna:CreateWindow({
+        Name = "EXECO",
+        Subtitle = "Anime Expeditions",
+        LogoID = "10734897102",
+        LoadingEnabled = false,
+        ConfigSettings = { RootFolder = nil, ConfigFolder = "EXECO" },
+        KeySystem = false
     })
 
-    Window:Tag({
-        Title = "Native",
-        Icon = "sparkles",
-        Border = true,
+    FeaturesTab = Window:CreateTab({
+        Name = "Features", Icon = "tune", ImageSource = "Material", ShowTitle = true
     })
-
-    FeaturesTab = Window:Tab({
-        Title = "Features",
-        Desc = "Resources and rollback tools",
-        Icon = "sparkles",
-        Border = true,
-    })
-
-    SettingsTab = Window:Tab({
-        Title = "Settings",
-        Desc = "Session and data management",
-        Icon = "settings",
-        Border = true,
+    SettingsTab = Window:CreateTab({
+        Name = "Settings", Icon = "settings", ImageSource = "Material", ShowTitle = true
     })
 end
 
@@ -3219,176 +3173,111 @@ oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
 end))
 
 -- ================================
--- UI: WINDUI
+-- UI: LUNA
 -- ================================
 local function QueueBlackSigilForTeleport()
-    local queueFn =
-        queue_on_teleport
-        or (syn and syn.queue_on_teleport)
-        or (fluxus and fluxus.queue_on_teleport)
-
+    local queueFn = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport)
     if type(queueFn) ~= "function" then
         warn("[EXECO] Executor does not expose queue_on_teleport")
         return false
     end
-
     local payload = [[
 local env = (type(getgenv) == "function" and getgenv()) or _G
 env.BLACKSIGIL_TELEPORT_BOOT = true
 loadstring(game:HttpGet("https://raw.githubusercontent.com/szty-v/chujcieto/refs/heads/main/ez.lua"))()
 ]]
-
-    local ok, err = pcall(function()
-        queueFn(payload)
-    end)
-
+    local ok, err = pcall(function() queueFn(payload) end)
     if not ok then
         warn("[EXECO] queue_on_teleport failed:", err)
         return false
     end
-
     return true
 end
 
--- A rejoin boot intentionally skips this entire block: no WindUI download,
--- no Window, no tabs, no notification, and therefore no EXECO ScreenGui flash.
-if not __BLACKSIGIL_TELEPORT_BOOT and Window and FeaturesTab and SettingsTab then
-    local resources = FeaturesTab:Section({
-        Title = "Resources",
-        Desc = "Client-side values used by EXECO features",
-        Box = true,
-        BoxBorder = true,
-        Opened = true,
-    })
+-- Never construct Luna during queued rejoin execution.
+if not __BLACKSIGIL_TELEPORT_BOOT and Luna and Window and FeaturesTab and SettingsTab then
+    FeaturesTab:CreateSection("Resources")
 
-    resources:Slider({
-        Title = "Gems",
-        Desc = "Visual gem balance",
-        Step = 1,
-        Value = { Min = 0, Max = 1000000, Default = math.clamp(VisualState.Gems, 0, 1000000) },
-        Callback = function(value)
-            VisualState.Gems = math.floor(tonumber(value) or 0)
-            local ok, err = SetLocalItemAmount("Gem", VisualState.Gems)
-            if not ok then warn("[EXECO] Gem slider sync warning:", err) end
-            SyncAllDisplays()
+    FeaturesTab:CreateSlider({
+        Name="Gems", Range={0,1000000}, Increment=1,
+        CurrentValue=math.clamp(VisualState.Gems,0,1000000),
+        Callback=function(value)
+            VisualState.Gems=math.floor(tonumber(value) or 0)
+            local ok,err=SetLocalItemAmount("Gem",VisualState.Gems)
+            if not ok then warn("[EXECO] Gem slider sync warning:",err) end
+            SyncAllDisplays(); QueuePersistentSave()
+        end
+    },"EXECO_Gems")
+
+    FeaturesTab:CreateSlider({
+        Name="Gold", Range={0,10000000}, Increment=1,
+        CurrentValue=math.clamp(VisualState.Gold,0,10000000),
+        Callback=function(value)
+            VisualState.Gold=math.floor(tonumber(value) or 0)
+            SyncAllDisplays(); QueuePersistentSave()
+        end
+    },"EXECO_Gold")
+
+    FeaturesTab:CreateSlider({
+        Name="Trait Rerolls", Range={0,100000}, Increment=1,
+        CurrentValue=math.clamp(VisualState.TraitRerolls,0,100000),
+        Callback=function(value)
+            VisualState.TraitRerolls=math.floor(tonumber(value) or 0)
+            local ok,err=SetLocalItemAmount(GetTraitRerollItemName(),VisualState.TraitRerolls)
+            if not ok then warn("[EXECO] Reroll slider sync warning:",err) end
+            SyncAllDisplays(); QueuePersistentSave()
+        end
+    },"EXECO_TraitRerolls")
+
+    FeaturesTab:CreateSection("Rollback")
+
+    FeaturesTab:CreateToggle({
+        Name="Trait Rerolls", Description="Enable trait reroll rollback",
+        CurrentValue=_G.AVTraitRollback==true,
+        Callback=function(value)
+            _G.AVTraitRollback=value==true
+            SafeLog("Trait Rerolls",_G.AVTraitRollback and "Enabled" or "Disabled")
+        end
+    },"EXECO_TraitRollback")
+
+    FeaturesTab:CreateToggle({
+        Name="Banner Summons", Description="Enable banner summon rollback",
+        CurrentValue=_G.AVSummonRollback==true,
+        Callback=function(value)
+            _G.AVSummonRollback=value==true
+            SafeLog("Banner Summons",_G.AVSummonRollback and "Enabled" or "Disabled")
+        end
+    },"EXECO_BannerRollback")
+
+    FeaturesTab:CreateSection("Session")
+    FeaturesTab:CreateButton({
+        Name="Rejoin Current Server",
+        Description="Save current state and reconnect",
+        Callback=function()
             QueuePersistentSave()
-        end,
-    })
-
-    resources:Slider({
-        Title = "Gold",
-        Desc = "Visual gold balance",
-        Step = 1,
-        Value = { Min = 0, Max = 10000000, Default = math.clamp(VisualState.Gold, 0, 10000000) },
-        Callback = function(value)
-            VisualState.Gold = math.floor(tonumber(value) or 0)
-            SyncAllDisplays()
-            QueuePersistentSave()
-        end,
-    })
-
-    resources:Slider({
-        Title = "Trait Rerolls",
-        Desc = "Visual reroll item balance",
-        Step = 1,
-        Value = { Min = 0, Max = 100000, Default = math.clamp(VisualState.TraitRerolls, 0, 100000) },
-        Callback = function(value)
-            VisualState.TraitRerolls = math.floor(tonumber(value) or 0)
-            local ok, err = SetLocalItemAmount(GetTraitRerollItemName(), VisualState.TraitRerolls)
-            if not ok then warn("[EXECO] Reroll slider sync warning:", err) end
-            SyncAllDisplays()
-            QueuePersistentSave()
-        end,
-    })
-
-    FeaturesTab:Space()
-
-    local rollback = FeaturesTab:Section({
-        Title = "Rollback",
-        Desc = "Feature interception controls",
-        Box = true,
-        BoxBorder = true,
-        Opened = true,
-    })
-
-    rollback:Toggle({
-        Title = "Trait Rerolls",
-        Desc = "Enable local trait reroll rollback",
-        Value = _G.AVTraitRollback == true,
-        Callback = function(value)
-            _G.AVTraitRollback = value == true
-            SafeLog("Trait Rerolls", _G.AVTraitRollback and "Enabled" or "Disabled")
-        end,
-    })
-
-    rollback:Toggle({
-        Title = "Banner Summons",
-        Desc = "Enable local banner summon rollback",
-        Value = _G.AVSummonRollback == true,
-        Callback = function(value)
-            _G.AVSummonRollback = value == true
-            SafeLog("Banner Summons", _G.AVSummonRollback and "Enabled" or "Disabled")
-        end,
-    })
-
-    local session = SettingsTab:Section({
-        Title = "Session",
-        Desc = "Rejoin with persistent mock state restored silently",
-        Box = true,
-        BoxBorder = true,
-        Opened = true,
-    })
-
-    session:Button({
-        Title = "Rejoin Current Server",
-        Desc = "Save state, queue silent restore, then reconnect",
-        Icon = "refresh-cw",
-        Callback = function()
-            QueuePersistentSave()
-            if SavePersistentState then
-                pcall(SavePersistentState)
-            end
-
-            local queued = QueueBlackSigilForTeleport()
-            if not queued then
-                warn("[EXECO] Auto-execute could not be queued")
-            end
-
+            if SavePersistentState then pcall(SavePersistentState) end
+            if not QueueBlackSigilForTeleport() then warn("[EXECO] Auto-execute could not be queued") end
             task.wait(0.15)
-            TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
-        end,
+            TeleportService:TeleportToPlaceInstance(game.PlaceId,game.JobId,LocalPlayer)
+        end
     })
 
-    SettingsTab:Space()
-
-    local data = SettingsTab:Section({
-        Title = "Data Management",
-        Desc = "Manage EXECO's locally persisted mock data",
-        Box = true,
-        BoxBorder = true,
-        Opened = true,
-    })
-
-    data:Button({
-        Title = "Delete All Mock Data",
-        Desc = "Clear saved mock units, state, and local persistence",
-        Icon = "trash-2",
-        Callback = function()
+    SettingsTab:CreateSection("Data")
+    SettingsTab:CreateButton({
+        Name="Delete All Mock Data",
+        Description="Clear all saved mock units and local mock state",
+        Callback=function()
             DeleteAllMockData()
-            WindUI:Notify({
-                Title = "EXECO",
-                Content = "Mock data cleared.",
-                Icon = "check",
-                Duration = 4,
+            Luna:Notification({
+                Title="EXECO", Icon="check_circle", ImageSource="Material",
+                Content="Mock data cleared."
             })
-        end,
+        end
     })
 
-    WindUI:Notify({
-        Title = "EXECO",
-        Content = "Ready. Press RightShift to toggle the interface.",
-        Icon = "shield-check",
-        Duration = 4,
+    Luna:Notification({
+        Title="EXECO", Icon="verified", ImageSource="Material",
+        Content="Anime Expeditions features loaded."
     })
 end
 
@@ -3452,9 +3341,9 @@ SafeLog("Hotbar", "v15 native visuals; 1s rejoin boot + lazy safe native-module 
 SafeLog("Pity", "Summon pity 50/400/10000; trait pity Draconic 300 / Forsaken 500 / Primordial 750 / Unbound 1500")
 SafeLog("State", "Using leaf ItemData Values + PlayerData.HotbarData backing state")
 
--- Rejoin auto-execution is silent by construction: WindUI is never loaded.
+-- Rejoin auto-execution is silent by construction: Luna is never loaded.
 
 print(string.format(
-    "EXECO - Anime Expeditions (WindUI Edition) initialized with %d live traits and banner summon support.",
+    "EXECO - Anime Expeditions (Luna Edition) initialized with %d live traits and banner summon support.",
     #TraitDatabase
 ))
