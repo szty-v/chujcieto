@@ -1,5 +1,5 @@
 --[[
-    EXECO - Anime Expeditions (Starlight Interface Edition)
+    EXECO - Anime Expeditions (Cascade Dark Interface Edition)
     Trait + Banner Feature Engine - Native Fusion Edition
 
     This build keeps the existing feature behavior while
@@ -8,7 +8,7 @@
 
 -- Rejoin auto-execution starts much earlier than a manual execute.
 -- On teleport boots, let Roblox finish constructing its own HUD/PlayerScripts
--- before EXECO touches optional UI code or native Fusion UI modules.
+-- before EXECO imports Cascade/Fusion UI modules.
 local __BLACKSIGIL_ENV = (type(getgenv) == "function" and getgenv()) or _G
 local __BLACKSIGIL_TELEPORT_BOOT = __BLACKSIGIL_ENV.BLACKSIGIL_TELEPORT_BOOT == true
 __BLACKSIGIL_ENV.BLACKSIGIL_TELEPORT_BOOT = nil
@@ -33,10 +33,27 @@ end
 WaitForTeleportBootStability()
 
 -- ================================
--- STARLIGHT INITIALIZATION
+-- CASCADE UI INITIALIZATION
 -- ================================
--- Rejoin boots stay fully headless. Starlight is never fetched or constructed on a queued rejoin.
-local Starlight, NebulaIcons, Window
+local cascade
+do
+    local function importRelease(owner, repo, version, file)
+        local tag = (version == "latest" and "latest/download" or "download/" .. version)
+        local url = ("https://github.com/%s/%s/releases/%s/%s"):format(owner, repo, tag, file)
+        return loadstring(game:HttpGetAsync(url), file)()
+    end
+
+    local ok, result = pcall(function()
+        return importRelease("cascadeui", "Cascade", "latest", "dist.luau")
+    end)
+
+    if ok then
+        cascade = result
+    else
+        warn("[EXECO] Failed to load Cascade:", result)
+        return
+    end
+end
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -44,48 +61,137 @@ local TeleportService = game:GetService("TeleportService")
 local HttpService = game:GetService("HttpService")
 local StarterPlayer = game:GetService("StarterPlayer")
 local LocalPlayer = Players.LocalPlayer
+
+-- Set this to the raw URL hosting this EXECO build for rejoin auto-execution.
 local EXECO_RAW_URL = "https://raw.githubusercontent.com/szty-v/chujcieto/refs/heads/main/ez.lua"
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
-if not __BLACKSIGIL_TELEPORT_BOOT then
-    local env = (type(getgenv) == "function" and getgenv()) or _G
-    env.InterfaceName = "EXECO_Starlight"
 
-    local okUI, uiResult = pcall(function()
-        return loadstring(game:HttpGet("https://raw.nebulasoftworks.xyz/starlight"))()
-    end)
-    local okIcons, iconResult = pcall(function()
-        return loadstring(game:HttpGet("https://raw.nebulasoftworks.xyz/nebula-icon-library-loader"))()
-    end)
+local FusionPackage = ReplicatedStorage:WaitForChild("FusionPackage")
+local Dependencies = require(FusionPackage:WaitForChild("Dependencies"))
+local Fusion = require(FusionPackage:WaitForChild("Fusion"))
+local NativeState = require(FusionPackage:WaitForChild("State"))
+local NativeSlotComponent = nil
+local NativeSlotLoadAttempted = false
+local NodesModule = require(ReplicatedStorage:WaitForChild("Nodes"))
+local OnEvent = Fusion.OnEvent
+local PlayerDataState = Dependencies.PlayerData
+local UnitDataState = Dependencies.UnitData
+local ItemDataState = Dependencies.ItemData
+local HotbarState = Dependencies.HotbarState
+local BannerDataState = Dependencies.BannerData
 
-    if not okUI or type(uiResult) ~= "table" then
-        warn("[EXECO] Failed to load Starlight:", uiResult)
-        return
+local function IsModuleAlreadyLoaded(moduleScript)
+    if not moduleScript or not moduleScript:IsA("ModuleScript") then
+        return false
     end
 
-    Starlight = uiResult
-    NebulaIcons = okIcons and iconResult or nil
-
-    local okWindow, windowResult = pcall(function()
-        return Starlight:CreateWindow({
-            Name = "EXECO",
-            Subtitle = "Anime Expeditions",
-            Icon = 82795327169782,
-            LoadingEnabled = false,
-            InterfaceAdvertisingPrompts = false,
-            NotifyOnCallbackError = true,
-            FileSettings = {
-                ConfigFolder = "EXECO"
-            }
-        })
-    end)
-
-    if not okWindow or type(windowResult) ~= "table" then
-        warn("[EXECO] Failed to create Starlight window:", windowResult)
-        return
+    -- Most executors expose getloadedmodules(). On teleport boot this lets us
+    -- distinguish modules Roblox has already loaded from modules EXECO
+    -- would be first to load.
+    if type(getloadedmodules) == "function" then
+        local ok, modules = pcall(getloadedmodules)
+        if ok and type(modules) == "table" then
+            for _, loaded in ipairs(modules) do
+                if loaded == moduleScript then
+                    return true
+                end
+            end
+        end
     end
 
-    Window = windowResult
+    return false
+end
+
+local function NativeHotbarDependenciesArePrimed()
+    if not __BLACKSIGIL_TELEPORT_BOOT then
+        return true
+    end
+
+    local actions = FusionPackage:FindFirstChild("Actions")
+    local stateFolder = FusionPackage:FindFirstChild("State")
+    local components = FusionPackage:FindFirstChild("Components")
+    local base = components and components:FindFirstChild("Base")
+
+    local slotModule = base and base:FindFirstChild("Slot")
+    local buttonModule = base and base:FindFirstChild("Button")
+    local playSoundModule = stateFolder and stateFolder:FindFirstChild("PlaySound")
+    local getSettingModule = actions and actions:FindFirstChild("GetSettingValue")
+
+    if type(getloadedmodules) == "function" then
+        return IsModuleAlreadyLoaded(slotModule)
+            and IsModuleAlreadyLoaded(buttonModule)
+            and IsModuleAlreadyLoaded(playSoundModule)
+            and IsModuleAlreadyLoaded(getSettingModule)
+    end
+
+    -- Conservative fallback for executors without getloadedmodules:
+    -- wait until the game itself has mounted at least one full menu. At that
+    -- point Base.Menu/Base.Button/PlaySound have been required natively.
+    return PlayerGui:FindFirstChild("UnitInventory") ~= nil
+        or PlayerGui:FindFirstChild("ItemInventory") ~= nil
+        or PlayerGui:FindFirstChild("TraitReroll") ~= nil
+        or PlayerGui:FindFirstChild("Summon") ~= nil
+end
+
+local function GetNativeSlotComponent()
+    if NativeSlotComponent then
+        return NativeSlotComponent
+    end
+
+    if not NativeHotbarDependenciesArePrimed() then
+        return nil, "native hotbar UI modules are not primed yet"
+    end
+
+    local module = FusionPackage.Components.Base.Slot
+    local ok, result = pcall(require, module)
+    if not ok or type(result) ~= "function" then
+        return nil, tostring(result)
+    end
+
+    NativeSlotComponent = result
+    NativeSlotLoadAttempted = true
+    SafeLog("Native Hotbar", "native Slot modules primed; v15 renderer enabled")
+    return NativeSlotComponent
+end
+
+local SharedFolder = ReplicatedStorage:WaitForChild("Shared")
+local SharedUtils = require(SharedFolder:WaitForChild("Utils"))
+
+-- ================================
+-- APP & WINDOW SETUP (CASCADE)
+-- ================================
+local app = cascade.New({
+    WindowPill = true,
+    Theme = cascade.Themes.Dark,
+    Accent = cascade.Accents.Blue,
+})
+
+local Window = app:Window({
+    Title = "EXECO",
+    Subtitle = "Anime Expeditions",
+})
+
+local MainSection = Window:Section({
+    Title = "EXECO",
+})
+
+local DashboardTab = MainSection:Tab({
+    Selected = true,
+    Title = "Dashboard",
+})
+
+local FeaturesTab = MainSection:Tab({
+    Title = "Features",
+})
+
+local SettingsTab = MainSection:Tab({
+    Title = "Settings",
+})
+
+-- Silent teleport boot: keep Cascade hidden while persistent mock state restores.
+if __BLACKSIGIL_TELEPORT_BOOT then
+    app.Enabled = false
 end
 
 -- ================================
@@ -187,7 +293,7 @@ local function SyncUnitInventoryCount()
     -- exact frame the inventory counter is repainted, so relying on UnitData
     -- alone left the native label stuck at e.g. 1/100.
     local realCount = 0
-    local ok, root = pcall(function() return Fusion.peek(PlayerDataState) end)
+    local ok, root = pcall(Fusion.peek, PlayerDataState)
     if ok and type(root) == "table" and type(root.UnitData) == "table" then
         for unitID, unitData in pairs(root.UnitData) do
             local isMock = MockUnitIDs and MockUnitIDs[unitID]
@@ -610,7 +716,7 @@ local JsonSafeCopy
 -- No server currency is changed.
 -- ================================
 local function GetTraitRerollItemName()
-    local info = type(Dependencies) == "table" and Dependencies.Information or nil
+    local info = Dependencies.Information
     local traits = info and info.Traits
     local name = traits and traits.RerollItem
 
@@ -670,7 +776,7 @@ local function SetLocalItemAmount(assetName, amount)
     --   Fusion.peek(GemValue) -> { Amount = 1650 }
     --
     -- Never replace Dependencies.ItemData itself. Update only the leaf Value.
-    local okItems, itemContainer = pcall(function() return Fusion.peek(ItemDataState) end)
+    local okItems, itemContainer = pcall(Fusion.peek, ItemDataState)
 
     if not okItems or type(itemContainer) ~= "table" then
         return false, "Dependencies.ItemData unavailable"
@@ -682,7 +788,7 @@ local function SetLocalItemAmount(assetName, amount)
         return false, "ItemData leaf state missing for " .. tostring(assetName)
     end
 
-    local okCurrent, currentRecord = pcall(function() return Fusion.peek(itemState) end)
+    local okCurrent, currentRecord = pcall(Fusion.peek, itemState)
 
     if not okCurrent or type(currentRecord) ~= "table" then
         return false, "Unable to read ItemData leaf for " .. tostring(assetName)
@@ -759,13 +865,13 @@ end
 
 local function GetNativeUnitDataSnapshot()
     if UnitDataState and type(UnitDataState) == "table" then
-        local ok, result = pcall(function() return Fusion.peek(UnitDataState) end)
+        local ok, result = pcall(Fusion.peek, UnitDataState)
         if ok and type(result) == "table" then
             return result
         end
     end
 
-    local ok, root = pcall(function() return Fusion.peek(PlayerDataState) end)
+    local ok, root = pcall(Fusion.peek, PlayerDataState)
     if ok and type(root) == "table" and type(root.UnitData) == "table" then
         return root.UnitData
     end
@@ -777,7 +883,7 @@ local function GetNativeUnitLeaf(unitID)
     local container = UnitDataState
 
     if type(UnitDataState) == "table" then
-        local okPeek, resolved = pcall(function() return Fusion.peek(UnitDataState) end)
+        local okPeek, resolved = pcall(Fusion.peek, UnitDataState)
         if okPeek and type(resolved) == "table" then
             container = resolved
         end
@@ -794,7 +900,7 @@ local function ReadNativeUnitRecord(unitID)
     local leaf = GetNativeUnitLeaf(unitID)
 
     if type(leaf) == "table" and type(leaf.set) == "function" then
-        local ok, value = pcall(function() return Fusion.peek(leaf) end)
+        local ok, value = pcall(Fusion.peek, leaf)
         if ok and type(value) == "table" then
             return value, leaf
         end
@@ -802,7 +908,7 @@ local function ReadNativeUnitRecord(unitID)
         return leaf, nil
     end
 
-    local okRoot, root = pcall(function() return Fusion.peek(PlayerDataState) end)
+    local okRoot, root = pcall(Fusion.peek, PlayerDataState)
     if okRoot and type(root) == "table" and type(root.UnitData) == "table" then
         local value = root.UnitData[unitID]
         if type(value) == "table" then
@@ -1295,7 +1401,7 @@ local SummonRandom = Random.new()
 local SummonInProgress = false
 
 local function ResolveStateValue(value)
-    local ok, resolved = pcall(function() return Fusion.peek(value) end)
+    local ok, resolved = pcall(Fusion.peek, value)
     if ok then
         return resolved
     end
@@ -1303,7 +1409,7 @@ local function ResolveStateValue(value)
 end
 
 local function GetBannerSnapshot(bannerID)
-    local ok, root = pcall(function() return Fusion.peek(BannerDataState) end)
+    local ok, root = pcall(Fusion.peek, BannerDataState)
     if not ok or type(root) ~= "table" then
         return nil, "BannerData peek failed"
     end
@@ -2174,7 +2280,7 @@ local function IsMockUnitID(unitID)
         return true
     end
 
-    local ok, root = pcall(function() return Fusion.peek(PlayerDataState) end)
+    local ok, root = pcall(Fusion.peek, PlayerDataState)
     if ok and type(root) == "table" and type(root.UnitData) == "table" then
         data = root.UnitData[unitID]
         if type(data) == "table" and data.BLACKSIGILMock == true then
@@ -2192,7 +2298,7 @@ local function GetCurrentMockUnitData(unitID)
         return units[unitID]
     end
 
-    local ok, root = pcall(function() return Fusion.peek(PlayerDataState) end)
+    local ok, root = pcall(Fusion.peek, PlayerDataState)
     if ok and type(root) == "table" and type(root.UnitData) == "table"
         and type(root.UnitData[unitID]) == "table" then
         return root.UnitData[unitID]
@@ -2229,7 +2335,7 @@ local function SetMockInventoryEquipped(unitID, equipped)
 end
 
 local function GetRealHotbarSnapshot()
-    local ok, hotbar = pcall(function() return Fusion.peek(HotbarState) end)
+    local ok, hotbar = pcall(Fusion.peek, HotbarState)
     if ok and type(hotbar) == "table" then
         return hotbar
     end
@@ -2703,7 +2809,7 @@ local function GetFollowerExtraData(unitID, slot)
         AccessoryData = {}
     }
 
-    local ok, playerRoot = pcall(function() return Fusion.peek(PlayerDataState) end)
+    local ok, playerRoot = pcall(Fusion.peek, PlayerDataState)
     if ok and type(playerRoot) == "table" then
         if unitData.Skin and type(playerRoot.SkinData) == "table" then
             extra.SkinData = CloneMap(playerRoot.SkinData[unitData.Skin])
@@ -2883,7 +2989,7 @@ local function RestorePersistentMockData()
         return
     end
 
-    local okRoot, currentRoot = pcall(function() return Fusion.peek(PlayerDataState) end)
+    local okRoot, currentRoot = pcall(Fusion.peek, PlayerDataState)
     if not okRoot or type(currentRoot) ~= "table" then
         return
     end
@@ -3014,7 +3120,7 @@ local function DeleteAllMockData()
     end
 
     -- Remove every EXECO-created unit from both local UnitData states.
-    local okRoot, currentRoot = pcall(function() return Fusion.peek(PlayerDataState) end)
+    local okRoot, currentRoot = pcall(Fusion.peek, PlayerDataState)
     if okRoot and type(currentRoot) == "table" then
         local newUnits = CloneMap(currentRoot.UnitData)
         for unitID, unitData in pairs(newUnits) do
@@ -3187,282 +3293,269 @@ oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
 end))
 
 -- ================================
--- UI: STARLIGHT
+-- UI: CASCADE
 -- ================================
+local function AddCascadeSlider(form, title, subtitle, value, minimum, maximum, onChanged)
+    local row = form:Row({
+        SearchIndex = title,
+    })
+
+    row:Left():TitleStack({
+        Title = title,
+        Subtitle = subtitle,
+    })
+
+    return row:Right():Slider({
+        Value = value,
+        Minimum = minimum,
+        Maximum = maximum,
+        ValueChanged = function(self, newValue)
+            onChanged(newValue)
+        end,
+    })
+end
+
+local function AddCascadeToggle(form, title, subtitle, value, onChanged)
+    local row = form:Row({
+        SearchIndex = title,
+    })
+
+    row:Left():TitleStack({
+        Title = title,
+        Subtitle = subtitle,
+    })
+
+    return row:Right():Toggle({
+        Value = value,
+        ValueChanged = function(self, newValue)
+            onChanged(newValue == true)
+        end,
+    })
+end
+
+local function AddCascadeButton(form, title, subtitle, label, callback)
+    local row = form:Row({
+        SearchIndex = title,
+    })
+
+    row:Left():TitleStack({
+        Title = title,
+        Subtitle = subtitle,
+    })
+
+    return row:Right():Button({
+        Label = label,
+        Pushed = function(self)
+            callback()
+        end,
+    })
+end
+
+-- Dashboard
+do
+    local overview = DashboardTab:PageSection({
+        Title = "Overview",
+        Subtitle = "EXECO session status and feature summary.",
+    }):Form()
+
+    do
+        local row = overview:Row({ SearchIndex = "Features" })
+        row:Left():TitleStack({
+            Title = "Features",
+            Subtitle = "Banner summons, trait rerolls, inventory, equip and hotbar integration.",
+        })
+    end
+
+    do
+        local row = overview:Row({ SearchIndex = "Session" })
+        row:Left():TitleStack({
+            Title = "Session",
+            Subtitle = "Saved mock data and equipped units are restored automatically.",
+        })
+    end
+end
+
+-- Features
+do
+    local currencyForm = FeaturesTab:PageSection({
+        Title = "Currency & Resources",
+        Subtitle = "Local visual values mirrored into the native client state where supported.",
+    }):Form()
+
+    AddCascadeSlider(
+        currencyForm,
+        "Gems",
+        "Visual gem amount used by EXECO and local summon affordability.",
+        math.clamp(VisualState.Gems, 0, 1000000),
+        0,
+        1000000,
+        function(value)
+            VisualState.Gems = math.floor(tonumber(value) or 0)
+            local ok, err = SetLocalItemAmount("Gem", VisualState.Gems)
+            if not ok then warn("[EXECO] Gem slider sync warning:", err) end
+            SyncAllDisplays()
+            QueuePersistentSave()
+        end
+    )
+
+    AddCascadeSlider(
+        currencyForm,
+        "Gold",
+        "Visual gold amount shown by the native HUD.",
+        math.clamp(VisualState.Gold, 0, 10000000),
+        0,
+        10000000,
+        function(value)
+            VisualState.Gold = math.floor(tonumber(value) or 0)
+            SyncAllDisplays()
+            QueuePersistentSave()
+        end
+    )
+
+    AddCascadeSlider(
+        currencyForm,
+        "Trait Rerolls",
+        "Visual reroll currency mirrored to the local TraitReroll item state.",
+        math.clamp(VisualState.TraitRerolls, 0, 100000),
+        0,
+        100000,
+        function(value)
+            VisualState.TraitRerolls = math.floor(tonumber(value) or 0)
+            local ok, err = SetLocalItemAmount(GetTraitRerollItemName(), VisualState.TraitRerolls)
+            if not ok then warn("[EXECO] Reroll slider sync warning:", err) end
+            SyncAllDisplays()
+            QueuePersistentSave()
+        end
+    )
+
+    local featureForm = FeaturesTab:PageSection({
+        Title = "Feature Engine",
+        Subtitle = "Enable or disable EXECO's local rollback handlers.",
+    }):Form()
+
+    AddCascadeToggle(
+        featureForm,
+        "Trait Rerolls",
+        "Intercept native trait rerolls and apply EXECO's local visual reroll engine.",
+        _G.AVTraitRollback,
+        function(value)
+            _G.AVTraitRollback = value
+            SafeLog("Trait Rerolls", _G.AVTraitRollback and "Enabled" or "Disabled")
+        end
+    )
+
+    AddCascadeToggle(
+        featureForm,
+        "Banner Summons",
+        "Intercept native banner summons and apply EXECO's local summon engine.",
+        _G.AVSummonRollback,
+        function(value)
+            _G.AVSummonRollback = value
+            SafeLog("Banner Summons", _G.AVSummonRollback and "Enabled" or "Disabled")
+        end
+    )
+end
+
 local function QueueBlackSigilForTeleport()
-    local queueFn = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport)
+    local queueFn =
+        queue_on_teleport
+        or (syn and syn.queue_on_teleport)
+        or (fluxus and fluxus.queue_on_teleport)
+
     if type(queueFn) ~= "function" then
         warn("[EXECO] Executor does not expose queue_on_teleport")
         return false
     end
+
     local payload = [[
 local env = (type(getgenv) == "function" and getgenv()) or _G
 env.BLACKSIGIL_TELEPORT_BOOT = true
 loadstring(game:HttpGet("https://raw.githubusercontent.com/szty-v/chujcieto/refs/heads/main/ez.lua"))()
 ]]
-    local ok, err = pcall(function() queueFn(payload) end)
+
+    local ok, err = pcall(function()
+        queueFn(payload)
+    end)
+
     if not ok then
         warn("[EXECO] queue_on_teleport failed:", err)
         return false
     end
+
     return true
 end
 
--- Never construct Starlight during queued rejoin execution.
-if not __BLACKSIGIL_TELEPORT_BOOT and Starlight and Window then
-    local function SafeUI(name, builder)
-        local ok, result = pcall(builder)
-        if not ok then
-            warn("[EXECO] Starlight UI failed (" .. tostring(name) .. "):", result)
-            return nil
+do
+    local actionForm = FeaturesTab:PageSection({
+        Title = "Session",
+    }):Form()
+
+    AddCascadeButton(
+        actionForm,
+        "Rejoin Current Server",
+        "Save the current mock state, queue EXECO for teleport, and rejoin this server.",
+        "Rejoin",
+        function()
+            QueuePersistentSave()
+            if SavePersistentState then
+                pcall(SavePersistentState)
+            end
+
+            local queued = QueueBlackSigilForTeleport()
+            if not queued then
+                warn("[EXECO] Auto-execute could not be queued")
+            end
+
+            task.wait(0.15)
+            TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
         end
-        return result
-    end
+    )
+end
 
-    local function Icon(name, source)
-        if not NebulaIcons or type(NebulaIcons.GetIcon) ~= "function" then
-            return nil
+-- Settings
+do
+    local appearanceForm = SettingsTab:PageSection({
+        Title = "Appearance",
+    }):Form()
+
+    AddCascadeToggle(
+        appearanceForm,
+        "Dark mode",
+        "Cascade Dark is the default EXECO theme.",
+        app.Theme == cascade.Themes.Dark,
+        function(value)
+            app.Theme = value and cascade.Themes.Dark or cascade.Themes.Light
         end
-        local ok, result = pcall(function()
-            return NebulaIcons:GetIcon(name, source or "Material")
-        end)
-        return ok and result or nil
-    end
+    )
 
-    -- Native Starlight dashboard/home tab, following the documented preset.
-    SafeUI("home tab", function()
-        return Window:CreateHomeTab({
-            SupportedExecutors = {},
-            UnsupportedExecutors = {},
-            Backdrop = 0,
-            IconStyle = 1,
-            Changelog = {}
-        })
-    end)
+    local dataForm = SettingsTab:PageSection({
+        Title = "Data Management",
+    }):Form()
 
-    local MainSection = SafeUI("main tab section", function()
-        return Window:CreateTabSection("EXECO")
-    end)
-    local SystemSection = SafeUI("system tab section", function()
-        return Window:CreateTabSection("System")
-    end)
-
-    local FeaturesTab = MainSection and SafeUI("features tab", function()
-        return MainSection:CreateTab({
-            Name = "Features",
-            Icon = Icon("tune", "Material"),
-            Columns = 2
-        }, "EXECO_Features")
-    end)
-
-    local SettingsTab = SystemSection and SafeUI("settings tab", function()
-        return SystemSection:CreateTab({
-            Name = "Settings",
-            Icon = Icon("settings", "Material"),
-            Columns = 2
-        }, "EXECO_Settings")
-    end)
-
-    if FeaturesTab then
-        local ResourcesBox = SafeUI("resources groupbox", function()
-            return FeaturesTab:CreateGroupbox({
-                Name = "Resources",
-                Icon = Icon("payments", "Material"),
-                Column = 1
-            }, "EXECO_ResourcesBox")
-        end)
-
-        local RollbackBox = SafeUI("rollback groupbox", function()
-            return FeaturesTab:CreateGroupbox({
-                Name = "Rollback",
-                Icon = Icon("history", "Material"),
-                Column = 2
-            }, "EXECO_RollbackBox")
-        end)
-
-        local ActionsBox = SafeUI("actions groupbox", function()
-            return FeaturesTab:CreateGroupbox({
-                Name = "Actions",
-                Icon = Icon("restart_alt", "Material"),
-                Column = 2
-            }, "EXECO_ActionsBox")
-        end)
-
-        if ResourcesBox then
-            SafeUI("gems slider", function()
-                return ResourcesBox:CreateSlider({
-                    Name = "Gems",
-                    Icon = Icon("diamond", "Material"),
-                    Range = {0, 1000000},
-                    Increment = 1,
-                    CurrentValue = math.clamp(VisualState.Gems, 0, 1000000),
-                    Callback = function(value)
-                        VisualState.Gems = math.floor(tonumber(value) or 0)
-                        local ok, err = SetLocalItemAmount("Gem", VisualState.Gems)
-                        if not ok then warn("[EXECO] Gem slider sync warning:", err) end
-                        SyncAllDisplays()
-                        QueuePersistentSave()
-                    end
-                }, "EXECO_Gems")
-            end)
-
-            SafeUI("gold slider", function()
-                return ResourcesBox:CreateSlider({
-                    Name = "Gold",
-                    Icon = Icon("paid", "Material"),
-                    Range = {0, 10000000},
-                    Increment = 1,
-                    CurrentValue = math.clamp(VisualState.Gold, 0, 10000000),
-                    Callback = function(value)
-                        VisualState.Gold = math.floor(tonumber(value) or 0)
-                        SyncAllDisplays()
-                        QueuePersistentSave()
-                    end
-                }, "EXECO_Gold")
-            end)
-
-            SafeUI("trait rerolls slider", function()
-                return ResourcesBox:CreateSlider({
-                    Name = "Trait Rerolls",
-                    Icon = Icon("casino", "Material"),
-                    Range = {0, 100000},
-                    Increment = 1,
-                    CurrentValue = math.clamp(VisualState.TraitRerolls, 0, 100000),
-                    Callback = function(value)
-                        VisualState.TraitRerolls = math.floor(tonumber(value) or 0)
-                        local ok, err = SetLocalItemAmount(GetTraitRerollItemName(), VisualState.TraitRerolls)
-                        if not ok then warn("[EXECO] Reroll slider sync warning:", err) end
-                        SyncAllDisplays()
-                        QueuePersistentSave()
-                    end
-                }, "EXECO_TraitRerolls")
-            end)
+    AddCascadeButton(
+        dataForm,
+        "Delete All Mock Data",
+        "Clear persisted EXECO mock units, equipped slots, pity and visual session state.",
+        "Delete",
+        function()
+            DeleteAllMockData()
+            app:Notification({
+                App = "EXECO",
+                Title = "Data cleared",
+                Subtitle = "All mock data was deleted.",
+                Duration = 4,
+            })
         end
+    )
+end
 
-        if RollbackBox then
-            SafeUI("trait rollback toggle", function()
-                return RollbackBox:CreateToggle({
-                    Name = "Trait Rerolls",
-                    Icon = Icon("autorenew", "Material"),
-                    CurrentValue = _G.AVTraitRollback == true,
-                    Style = 2,
-                    Callback = function(value)
-                        _G.AVTraitRollback = value == true
-                        SafeLog("Trait Rerolls", _G.AVTraitRollback and "Enabled" or "Disabled")
-                    end
-                }, "EXECO_TraitRollback")
-            end)
-
-            SafeUI("banner rollback toggle", function()
-                return RollbackBox:CreateToggle({
-                    Name = "Banner Summons",
-                    Icon = Icon("auto_awesome", "Material"),
-                    CurrentValue = _G.AVSummonRollback == true,
-                    Style = 2,
-                    Callback = function(value)
-                        _G.AVSummonRollback = value == true
-                        SafeLog("Banner Summons", _G.AVSummonRollback and "Enabled" or "Disabled")
-                    end
-                }, "EXECO_BannerRollback")
-            end)
-        end
-
-        if ActionsBox then
-            SafeUI("rejoin server", function()
-                return ActionsBox:CreateButton({
-                    Name = "Rejoin Server",
-                    Icon = Icon("restart_alt", "Material"),
-                    Tooltip = "Save EXECO state and reconnect. The queued rejoin runs headless without reopening Starlight.",
-                    IndicatorStyle = 1,
-                    Callback = function()
-                        QueuePersistentSave()
-                        if SavePersistentState then
-                            pcall(SavePersistentState)
-                        end
-
-                        if not QueueBlackSigilForTeleport() then
-                            warn("[EXECO] Auto-execute could not be queued; rejoin cancelled to preserve silent boot")
-                            return
-                        end
-
-                        task.wait(0.15)
-                        TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
-                    end
-                }, "EXECO_RejoinServer")
-            end)
-        end
-    end
-
-    if SettingsTab then
-        local DataBox = SafeUI("data groupbox", function()
-            return SettingsTab:CreateGroupbox({
-                Name = "Data",
-                Icon = Icon("database", "Lucide"),
-                Column = 1
-            }, "EXECO_DataBox")
-        end)
-
-        if DataBox then
-            SafeUI("delete mock data", function()
-                return DataBox:CreateButton({
-                    Name = "Delete Mock Data",
-                    Icon = Icon("delete", "Material"),
-                    Tooltip = "Clear all EXECO mock units and saved local mock state.",
-                    Style = 2,
-                    Callback = function()
-                        local function performDelete()
-                            DeleteAllMockData()
-                            Starlight:Notification({
-                                Title = "EXECO",
-                                Icon = Icon("check", "Material"),
-                                Content = "Mock data deleted."
-                            }, "EXECO_DeleteNotice")
-                        end
-
-                        local dialog = SafeUI("delete confirmation", function()
-                            return Window:PromptDialog({
-                                Name = "Delete Mock Data?",
-                                Content = "This clears all saved EXECO mock state for this script.",
-                                Type = 1,
-                                Actions = {
-                                    Primary = {
-                                        Name = "Delete",
-                                        Icon = Icon("delete", "Material"),
-                                        Callback = performDelete
-                                    },
-                                    {
-                                        Name = "Cancel"
-                                    }
-                                }
-                            })
-                        end)
-
-                        if not dialog then
-                            performDelete()
-                        end
-                    end
-                }, "EXECO_DeleteMockData")
-            end)
-        end
-
-        SafeUI("theme groupbox", function()
-            return SettingsTab:BuildThemeGroupbox(1)
-        end)
-        SafeUI("config groupbox", function()
-            return SettingsTab:BuildConfigGroupbox(2)
-        end)
-    end
-
-    SafeUI("autoload theme", function()
-        if type(Starlight.LoadAutoloadTheme) == "function" then
-            Starlight:LoadAutoloadTheme()
-        end
-    end)
-    SafeUI("autoload config", function()
-        if type(Starlight.LoadAutoloadConfig) == "function" then
-            Starlight:LoadAutoloadConfig()
-        end
-    end)
+if not __BLACKSIGIL_TELEPORT_BOOT then
+    app:Notification({
+        App = "EXECO",
+        Title = "Features loaded",
+        Subtitle = "Cascade Dark interface initialized successfully.",
+        Duration = 4,
+    })
 end
 
 -- TraitReroll is created lazily. Do not change mock hotbar mount/equip state
@@ -3525,9 +3618,12 @@ SafeLog("Hotbar", "v15 native visuals; 1s rejoin boot + lazy safe native-module 
 SafeLog("Pity", "Summon pity 50/400/10000; trait pity Draconic 300 / Forsaken 500 / Primordial 750 / Unbound 1500")
 SafeLog("State", "Using leaf ItemData Values + PlayerData.HotbarData backing state")
 
--- Rejoin auto-execution is silent by construction: Starlight is never loaded.
+-- Rejoin auto-execution is silent: restore state, then leave the menu closed.
+if __BLACKSIGIL_TELEPORT_BOOT then
+    pcall(function() app.Enabled = false end)
+end
 
 print(string.format(
-    "EXECO - Anime Expeditions (Starlight Edition) initialized with %d live traits and banner summon support.",
+    "EXECO - Anime Expeditions (Cascade Dark Edition) initialized with %d live traits and banner summon support.",
     #TraitDatabase
 ))
