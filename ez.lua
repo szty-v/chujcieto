@@ -3627,7 +3627,7 @@ end
 do
     local controlForm = PersistenceTab:PageSection({
         Title = "Persistence Exploit",
-        Subtitle = "Unlock private value controls for this session.",
+        Subtitle = "",
     }):Form()
 
     AddCascadeToggle(
