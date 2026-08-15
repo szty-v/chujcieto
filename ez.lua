@@ -3505,25 +3505,6 @@ do
         end
     )
 
-    local dataForm = SettingsTab:PageSection({
-        Title = "Data Management",
-    }):Form()
-
-    AddCascadeButton(
-        dataForm,
-        "Delete All Data",
-        "Clear saved units, equipped slots, pity, and session data.",
-        "Delete",
-        function()
-            DeleteAllMockData()
-            app:Notification({
-                App = "EXECO",
-                Title = "Data cleared",
-                Subtitle = "All saved data was deleted.",
-                Duration = 4,
-            })
-        end
-    )
 end
 end
 
