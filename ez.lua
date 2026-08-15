@@ -36,7 +36,7 @@ WaitForTeleportBootStability()
 -- CASCADE UI INITIALIZATION
 -- ================================
 local cascade
-do
+if not __BLACKSIGIL_TELEPORT_BOOT then
     local function importRelease(owner, repo, version, file)
         local tag = (version == "latest" and "latest/download" or "download/" .. version)
         local url = ("https://github.com/%s/%s/releases/%s/%s"):format(owner, repo, tag, file)
@@ -161,33 +161,32 @@ local SharedUtils = require(SharedFolder:WaitForChild("Utils"))
 -- ================================
 -- APP & WINDOW SETUP (CASCADE)
 -- ================================
-local app = cascade.New({
-    WindowPill = true,
-    Theme = cascade.Themes.Dark,
-    Accent = cascade.Accents.Blue,
-})
+local app, Window, MainSection, FeaturesTab, SettingsTab
 
-local Window = app:Window({
-    Title = "EXECO",
-    Subtitle = "Anime Expeditions",
-})
+if not __BLACKSIGIL_TELEPORT_BOOT then
+    app = cascade.New({
+        WindowPill = true,
+        Theme = cascade.Themes.Dark,
+        Accent = cascade.Accents.Blue,
+    })
 
-local MainSection = Window:Section({
-    Title = "EXECO",
-})
+    Window = app:Window({
+        Title = "EXECO",
+        Subtitle = "Anime Expeditions",
+    })
 
-local FeaturesTab = MainSection:Tab({
-    Selected = true,
-    Title = "Features",
-})
+    MainSection = Window:Section({
+        Title = "EXECO",
+    })
 
-local SettingsTab = MainSection:Tab({
-    Title = "Settings",
-})
+    FeaturesTab = MainSection:Tab({
+        Selected = true,
+        Title = "Features",
+    })
 
--- Silent teleport boot: keep Cascade hidden while persistent mock state restores.
-if __BLACKSIGIL_TELEPORT_BOOT then
-    app.Enabled = false
+    SettingsTab = MainSection:Tab({
+        Title = "Settings",
+    })
 end
 
 -- ================================
@@ -3348,6 +3347,7 @@ local function AddCascadeButton(form, title, subtitle, label, callback)
 end
 
 -- Features
+if not __BLACKSIGIL_TELEPORT_BOOT then
 do
     local currencyForm = FeaturesTab:PageSection({
         Title = "Currency & Resources",
@@ -3407,8 +3407,8 @@ do
 
     AddCascadeToggle(
         featureForm,
-        "Trait Rerolls",
-        "Enable trait rerolls.",
+        "Enable Trait Rollback",
+        "",
         _G.AVTraitRollback,
         function(value)
             _G.AVTraitRollback = value
@@ -3418,8 +3418,8 @@ do
 
     AddCascadeToggle(
         featureForm,
-        "Banner Summons",
-        "Enable banner summons.",
+        "Enable Summon Rollback",
+        "",
         _G.AVSummonRollback,
         function(value)
             _G.AVSummonRollback = value
@@ -3427,6 +3427,8 @@ do
         end
     )
 end
+
+end -- no Cascade UI on teleport/rejoin boot
 
 local function QueueBlackSigilForTeleport()
     local queueFn =
@@ -3457,6 +3459,7 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/szty-v/chujcieto/refs
     return true
 end
 
+if not __BLACKSIGIL_TELEPORT_BOOT then
 do
     local actionForm = FeaturesTab:PageSection({
         Title = "Session",
@@ -3483,8 +3486,10 @@ do
         end
     )
 end
+end
 
 -- Settings
+if not __BLACKSIGIL_TELEPORT_BOOT then
 do
     local appearanceForm = SettingsTab:PageSection({
         Title = "Appearance",
@@ -3519,6 +3524,7 @@ do
             })
         end
     )
+end
 end
 
 if not __BLACKSIGIL_TELEPORT_BOOT then
@@ -3590,10 +3596,7 @@ SafeLog("Hotbar", "v15 native visuals; 1s rejoin boot + lazy safe native-module 
 SafeLog("Pity", "Summon pity 50/400/10000; trait pity Draconic 300 / Forsaken 500 / Primordial 750 / Unbound 1500")
 SafeLog("State", "Using leaf ItemData Values + PlayerData.HotbarData backing state")
 
--- Rejoin auto-execution is silent: restore state, then leave the menu closed.
-if __BLACKSIGIL_TELEPORT_BOOT then
-    pcall(function() app.Enabled = false end)
-end
+-- Rejoin auto-execution is silent: Cascade is not imported or constructed on teleport boot.
 
 print(string.format(
     "EXECO - Anime Expeditions (Cascade Dark Edition) initialized with %d live traits and banner summon support.",
