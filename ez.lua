@@ -3229,6 +3229,17 @@ if not __BLACKSIGIL_TELEPORT_BOOT and Starlight and Window then
         return ok and result or nil
     end
 
+    -- Native Starlight dashboard/home tab, following the documented preset.
+    SafeUI("home tab", function()
+        return Window:CreateHomeTab({
+            SupportedExecutors = {},
+            UnsupportedExecutors = {},
+            Backdrop = 0,
+            IconStyle = 1,
+            Changelog = {}
+        })
+    end)
+
     local MainSection = SafeUI("main tab section", function()
         return Window:CreateTabSection("EXECO")
     end)
@@ -3236,28 +3247,12 @@ if not __BLACKSIGIL_TELEPORT_BOOT and Starlight and Window then
         return Window:CreateTabSection("System")
     end)
 
-    local DashboardTab = MainSection and SafeUI("dashboard tab", function()
+    local FeaturesTab = MainSection and SafeUI("features tab", function()
         return MainSection:CreateTab({
-            Name = "Dashboard",
-            Icon = Icon("dashboard", "Material"),
+            Name = "Features",
+            Icon = Icon("tune", "Material"),
             Columns = 2
-        }, "EXECO_Dashboard")
-    end)
-
-    local ResourcesTab = MainSection and SafeUI("resources tab", function()
-        return MainSection:CreateTab({
-            Name = "Resources",
-            Icon = Icon("database", "Lucide"),
-            Columns = 2
-        }, "EXECO_Resources")
-    end)
-
-    local RollbackTab = MainSection and SafeUI("rollback tab", function()
-        return MainSection:CreateTab({
-            Name = "Rollback",
-            Icon = Icon("history", "Material"),
-            Columns = 2
-        }, "EXECO_Rollback")
+        }, "EXECO_Features")
     end)
 
     local SettingsTab = SystemSection and SafeUI("settings tab", function()
@@ -3268,118 +3263,26 @@ if not __BLACKSIGIL_TELEPORT_BOOT and Starlight and Window then
         }, "EXECO_Settings")
     end)
 
-    -- Dashboard: only useful at-a-glance status and session actions.
-    if DashboardTab then
-        local StatusBox = SafeUI("dashboard status", function()
-            return DashboardTab:CreateGroupbox({
-                Name = "Status",
-                Icon = Icon("activity", "Lucide"),
-                Column = 1
-            }, "EXECO_StatusBox")
-        end)
-
-        if StatusBox then
-            SafeUI("status engine", function()
-                return StatusBox:CreateLabel({
-                    Name = "Trait engine: " .. tostring(#TraitDatabase) .. " live traits",
-                    Icon = Icon("check_circle", "Material")
-                }, "EXECO_StatusTraits")
-            end)
-            SafeUI("status persistence", function()
-                return StatusBox:CreateLabel({
-                    Name = "Persistent mock state enabled",
-                    Icon = Icon("save", "Material")
-                }, "EXECO_StatusPersistence")
-            end)
-            SafeUI("status hotbar", function()
-                return StatusBox:CreateLabel({
-                    Name = "Native client presentation enabled",
-                    Icon = Icon("visibility", "Material")
-                }, "EXECO_StatusPresentation")
-            end)
-        end
-
-        local SessionBox = SafeUI("dashboard session", function()
-            return DashboardTab:CreateGroupbox({
-                Name = "Session",
-                Icon = Icon("refresh", "Material"),
-                Column = 2
-            }, "EXECO_SessionBox")
-        end)
-
-        if SessionBox then
-            SafeUI("sync presentation", function()
-                return SessionBox:CreateButton({
-                    Name = "Sync Client UI",
-                    Icon = Icon("sync", "Material"),
-                    Tooltip = "Re-apply the current EXECO values to the visible game interface.",
-                    Callback = function()
-                        SyncVisualCurrenciesToNativeState()
-                        SyncAllDisplays()
-                        Starlight:Notification({
-                            Title = "EXECO",
-                            Icon = Icon("check", "Material"),
-                            Content = "Client UI synchronized."
-                        }, "EXECO_SyncNotice")
-                    end
-                }, "EXECO_SyncUI")
-            end)
-
-            SafeUI("save mock state", function()
-                return SessionBox:CreateButton({
-                    Name = "Save Mock State",
-                    Icon = Icon("save", "Material"),
-                    Callback = function()
-                        local ok = SavePersistentState and pcall(SavePersistentState)
-                        Starlight:Notification({
-                            Title = "EXECO",
-                            Icon = Icon(ok and "check" or "error", "Material"),
-                            Content = ok and "Mock state saved." or "Could not save mock state."
-                        }, "EXECO_SaveNotice")
-                    end
-                }, "EXECO_SaveState")
-            end)
-
-            SafeUI("rejoin server", function()
-                return SessionBox:CreateButton({
-                    Name = "Rejoin Server",
-                    Icon = Icon("refresh", "Material"),
-                    Tooltip = "Save state and reconnect to the current server.",
-                    Callback = function()
-                        QueuePersistentSave()
-                        if SavePersistentState then pcall(SavePersistentState) end
-                        if not QueueBlackSigilForTeleport() then
-                            warn("[EXECO] Auto-execute could not be queued")
-                        end
-                        task.wait(0.15)
-                        TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
-                    end
-                }, "EXECO_Rejoin")
-            end)
-        end
-    end
-
-    -- Resources: value controls only, split evenly across two columns.
-    if ResourcesTab then
-        local CurrencyBox = SafeUI("currency groupbox", function()
-            return ResourcesTab:CreateGroupbox({
-                Name = "Currency",
+    if FeaturesTab then
+        local ResourcesBox = SafeUI("resources groupbox", function()
+            return FeaturesTab:CreateGroupbox({
+                Name = "Resources",
                 Icon = Icon("payments", "Material"),
                 Column = 1
-            }, "EXECO_CurrencyBox")
+            }, "EXECO_ResourcesBox")
         end)
 
-        local RerollBox = SafeUI("reroll resource groupbox", function()
-            return ResourcesTab:CreateGroupbox({
-                Name = "Traits",
-                Icon = Icon("autorenew", "Material"),
+        local RollbackBox = SafeUI("rollback groupbox", function()
+            return FeaturesTab:CreateGroupbox({
+                Name = "Rollback",
+                Icon = Icon("history", "Material"),
                 Column = 2
-            }, "EXECO_RerollBox")
+            }, "EXECO_RollbackBox")
         end)
 
-        if CurrencyBox then
+        if ResourcesBox then
             SafeUI("gems slider", function()
-                return CurrencyBox:CreateSlider({
+                return ResourcesBox:CreateSlider({
                     Name = "Gems",
                     Icon = Icon("diamond", "Material"),
                     Range = {0, 1000000},
@@ -3396,7 +3299,7 @@ if not __BLACKSIGIL_TELEPORT_BOOT and Starlight and Window then
             end)
 
             SafeUI("gold slider", function()
-                return CurrencyBox:CreateSlider({
+                return ResourcesBox:CreateSlider({
                     Name = "Gold",
                     Icon = Icon("paid", "Material"),
                     Range = {0, 10000000},
@@ -3409,11 +3312,9 @@ if not __BLACKSIGIL_TELEPORT_BOOT and Starlight and Window then
                     end
                 }, "EXECO_Gold")
             end)
-        end
 
-        if RerollBox then
             SafeUI("trait rerolls slider", function()
-                return RerollBox:CreateSlider({
+                return ResourcesBox:CreateSlider({
                     Name = "Trait Rerolls",
                     Icon = Icon("casino", "Material"),
                     Range = {0, 100000},
@@ -3428,47 +3329,13 @@ if not __BLACKSIGIL_TELEPORT_BOOT and Starlight and Window then
                     end
                 }, "EXECO_TraitRerolls")
             end)
-
-            SafeUI("refresh traits", function()
-                return RerollBox:CreateButton({
-                    Name = "Refresh Trait Database",
-                    Icon = Icon("refresh", "Material"),
-                    Callback = function()
-                        local ok, result = RefreshTraitDatabase(false)
-                        Starlight:Notification({
-                            Title = "EXECO",
-                            Icon = Icon(ok and "check" or "error", "Material"),
-                            Content = ok and ("Loaded " .. tostring(result) .. " live traits.") or ("Trait refresh failed: " .. tostring(result))
-                        }, "EXECO_TraitRefreshNotice")
-                    end
-                }, "EXECO_RefreshTraits")
-            end)
         end
-    end
 
-    -- Rollback: no explanatory filler, only the two actual feature switches.
-    if RollbackTab then
-        local TraitBox = SafeUI("trait rollback groupbox", function()
-            return RollbackTab:CreateGroupbox({
-                Name = "Trait Rerolls",
-                Icon = Icon("autorenew", "Material"),
-                Column = 1
-            }, "EXECO_TraitRollbackBox")
-        end)
-
-        local BannerBox = SafeUI("banner rollback groupbox", function()
-            return RollbackTab:CreateGroupbox({
-                Name = "Banner Summons",
-                Icon = Icon("auto_awesome", "Material"),
-                Column = 2
-            }, "EXECO_BannerRollbackBox")
-        end)
-
-        if TraitBox then
+        if RollbackBox then
             SafeUI("trait rollback toggle", function()
-                return TraitBox:CreateToggle({
-                    Name = "Enable Trait Rollback",
-                    Icon = Icon("history", "Material"),
+                return RollbackBox:CreateToggle({
+                    Name = "Trait Rerolls",
+                    Icon = Icon("autorenew", "Material"),
                     CurrentValue = _G.AVTraitRollback == true,
                     Style = 2,
                     Callback = function(value)
@@ -3477,13 +3344,11 @@ if not __BLACKSIGIL_TELEPORT_BOOT and Starlight and Window then
                     end
                 }, "EXECO_TraitRollback")
             end)
-        end
 
-        if BannerBox then
             SafeUI("banner rollback toggle", function()
-                return BannerBox:CreateToggle({
-                    Name = "Enable Banner Rollback",
-                    Icon = Icon("history", "Material"),
+                return RollbackBox:CreateToggle({
+                    Name = "Banner Summons",
+                    Icon = Icon("auto_awesome", "Material"),
                     CurrentValue = _G.AVSummonRollback == true,
                     Style = 2,
                     Callback = function(value)
@@ -3509,7 +3374,7 @@ if not __BLACKSIGIL_TELEPORT_BOOT and Starlight and Window then
                 return DataBox:CreateButton({
                     Name = "Delete Mock Data",
                     Icon = Icon("delete", "Material"),
-                    Tooltip = "Clear all EXECO mock units, histories, pity values, equipped slots and saved local mock state.",
+                    Tooltip = "Clear all EXECO mock units and saved local mock state.",
                     Style = 2,
                     Callback = function()
                         local function performDelete()
@@ -3547,7 +3412,6 @@ if not __BLACKSIGIL_TELEPORT_BOOT and Starlight and Window then
             end)
         end
 
-        -- Starlight's built-in appearance and config controls.
         SafeUI("theme groupbox", function()
             return SettingsTab:BuildThemeGroupbox(1)
         end)
@@ -3556,7 +3420,6 @@ if not __BLACKSIGIL_TELEPORT_BOOT and Starlight and Window then
         end)
     end
 
-    -- Load user appearance/config only after all indexed elements have been built.
     SafeUI("autoload theme", function()
         if type(Starlight.LoadAutoloadTheme) == "function" then
             Starlight:LoadAutoloadTheme()
@@ -3566,14 +3429,6 @@ if not __BLACKSIGIL_TELEPORT_BOOT and Starlight and Window then
         if type(Starlight.LoadAutoloadConfig) == "function" then
             Starlight:LoadAutoloadConfig()
         end
-    end)
-
-    SafeUI("loaded notification", function()
-        return Starlight:Notification({
-            Title = "EXECO",
-            Icon = Icon("check_circle", "Material"),
-            Content = "Interface ready."
-        }, "EXECO_LoadedNotice")
     end)
 end
 
