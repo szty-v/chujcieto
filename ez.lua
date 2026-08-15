@@ -1791,8 +1791,6 @@ local function BuildMockUnitEntry(currentUnits, candidate)
     unit.Favorited = nil
     unit.Locked = nil
     unit.Equipped = nil
-    unit.Level = 1
-
     -- Fresh summons should not inherit another unit's trait/session history.
     unit.Trait = nil
     unit.TraitRollAmount = nil
@@ -3032,7 +3030,6 @@ local function RestorePersistentMockData()
         if type(unitID) == "string" and type(unitData) == "table" then
             local copy = CloneMap(unitData)
             copy.BLACKSIGILMock = true
-            copy.Level = 1
             newUnits[unitID] = copy
             MockUnitIDs[unitID] = true
             restored = restored + 1
