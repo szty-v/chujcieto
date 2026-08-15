@@ -69,7 +69,35 @@ local function StarlightIcon(name, source)
     local ok, icon = pcall(function()
         return NebulaIcons:GetIcon(name, source or "Material")
     end)
-    return ok and icon or nil
+
+    if not ok or icon == nil then
+        return nil
+    end
+
+    -- Starlight Image properties require a ContentId/string. Some versions of
+    -- Nebula Icons return an ImageLabel/ImageButton Instance instead.
+    if type(icon) == "string" then
+        return icon
+    end
+
+    if typeof(icon) == "Instance" then
+        if icon:IsA("ImageLabel") or icon:IsA("ImageButton") then
+            local image = icon.Image
+            if type(image) == "string" and image ~= "" then
+                return image
+            end
+        end
+        return nil
+    end
+
+    if type(icon) == "table" then
+        local image = icon.Image or icon.image or icon.Id or icon.ID or icon.Asset or icon.asset
+        if type(image) == "string" and image ~= "" then
+            return image
+        end
+    end
+
+    return nil
 end
 
 local Players = game:GetService("Players")
