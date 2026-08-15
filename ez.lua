@@ -723,7 +723,7 @@ local JsonSafeCopy
 
 -- ================================
 -- LOCAL CLIENT CURRENCY MIRROR
--- Keeps native BuyButton validation in sync with EXECO's visual sliders.
+-- Keeps native BuyButton validation in sync with EXECO's private amount fields.
 -- No server currency is changed.
 -- ================================
 local function GetTraitRerollItemName()
@@ -3465,7 +3465,7 @@ end))
 -- ================================
 -- UI: CASCADE
 -- ================================
-local function AddCascadeSlider(form, title, subtitle, value, minimum, maximum, onChanged)
+local function AddCascadeNumberField(form, title, subtitle, value, onChanged)
     local row = form:Row({
         SearchIndex = title,
     })
@@ -3475,29 +3475,36 @@ local function AddCascadeSlider(form, title, subtitle, value, minimum, maximum, 
         Subtitle = subtitle,
     })
 
-    local acceptedValue = value
+    local acceptedText = tostring(math.max(0, math.floor(tonumber(value) or 0)))
     local restoring = false
 
-    return row:Right():Slider({
-        Value = value,
-        Minimum = minimum,
-        Maximum = maximum,
+    return row:Right():TextField({
+        Value = acceptedText,
+        Placeholder = "Enter amount",
         ValueChanged = function(self, newValue)
             if restoring then
                 return
             end
 
+            local text = tostring(newValue or "")
+            local numeric = tonumber(text:gsub(",", ""))
+
+            -- The field itself is always editable, but no EXECO value/state/UI
+            -- mutation is allowed until the persistence exploit is enabled.
             if not PrivateControlsEnabled then
-                -- Keep both the actual visual state and the slider presentation
-                -- unchanged while private overrides are locked.
                 restoring = true
-                self.Value = acceptedValue
+                self.Value = acceptedText
                 restoring = false
                 return
             end
 
-            acceptedValue = newValue
-            onChanged(newValue)
+            if numeric == nil then
+                return
+            end
+
+            local amount = math.max(0, math.floor(numeric))
+            acceptedText = tostring(amount)
+            onChanged(amount)
         end,
     })
 end
@@ -3578,7 +3585,7 @@ do
     AddCascadeToggle(
         controlForm,
         "Enable Persistance Exploit",
-        "Allow the private sliders below to modify local values.",
+        "Allow the private fields below to modify local values.",
         PrivateControlsEnabled,
         function(value)
             if value == PrivateControlsEnabled then return end
@@ -3599,53 +3606,47 @@ do
 
     local currencyForm = PersistenceTab:PageSection({
         Title = "Currency & Resources",
-        Subtitle = "These sliders only work while Persistence Exploit is enabled.",
+        Subtitle = "These fields only apply while Persistence Exploit is enabled.",
     }):Form()
 
-    AddCascadeSlider(
+    AddCascadeNumberField(
         currencyForm,
         "Gems",
         "Set your gem amount.",
-        math.clamp(VisualState.Gems, 0, 1000000),
-        0,
-        1000000,
+        VisualState.Gems,
         function(value)
             if not PrivateControlsEnabled then return end
-            VisualState.Gems = math.floor(tonumber(value) or 0)
+            VisualState.Gems = value
             local ok, err = SetLocalItemAmount("Gem", VisualState.Gems)
-            if not ok then warn("[EXECO] Gem slider sync warning:", err) end
+            if not ok then warn("[EXECO] Gem field sync warning:", err) end
             SyncAllDisplays()
             QueuePersistentSave()
         end
     )
 
-    AddCascadeSlider(
+    AddCascadeNumberField(
         currencyForm,
         "Gold",
         "Set your gold amount.",
-        math.clamp(VisualState.Gold, 0, 10000000),
-        0,
-        10000000,
+        VisualState.Gold,
         function(value)
             if not PrivateControlsEnabled then return end
-            VisualState.Gold = math.floor(tonumber(value) or 0)
+            VisualState.Gold = value
             SyncAllDisplays()
             QueuePersistentSave()
         end
     )
 
-    AddCascadeSlider(
+    AddCascadeNumberField(
         currencyForm,
         "Trait Rerolls",
         "Set your trait reroll amount.",
-        math.clamp(VisualState.TraitRerolls, 0, 100000),
-        0,
-        100000,
+        VisualState.TraitRerolls,
         function(value)
             if not PrivateControlsEnabled then return end
-            VisualState.TraitRerolls = math.floor(tonumber(value) or 0)
+            VisualState.TraitRerolls = value
             local ok, err = SetLocalItemAmount(GetTraitRerollItemName(), VisualState.TraitRerolls)
-            if not ok then warn("[EXECO] Reroll slider sync warning:", err) end
+            if not ok then warn("[EXECO] Reroll field sync warning:", err) end
             SyncAllDisplays()
             QueuePersistentSave()
         end
@@ -3689,7 +3690,7 @@ do
     AddCascadeButton(
         actionForm,
         "Rejoin Current Server",
-        "Rejoin using the last manually saved mock snapshot.",
+        nil,
         "Rejoin",
         function()
             local queued = QueueBlackSigilForTeleport()
