@@ -176,12 +176,8 @@ local MainSection = Window:Section({
     Title = "EXECO",
 })
 
-local DashboardTab = MainSection:Tab({
-    Selected = true,
-    Title = "Dashboard",
-})
-
 local FeaturesTab = MainSection:Tab({
+    Selected = true,
     Title = "Features",
 })
 
@@ -3351,41 +3347,17 @@ local function AddCascadeButton(form, title, subtitle, label, callback)
     })
 end
 
--- Dashboard
-do
-    local overview = DashboardTab:PageSection({
-        Title = "Overview",
-        Subtitle = "EXECO session status and feature summary.",
-    }):Form()
-
-    do
-        local row = overview:Row({ SearchIndex = "Features" })
-        row:Left():TitleStack({
-            Title = "Features",
-            Subtitle = "Banner summons, trait rerolls, inventory, equip and hotbar integration.",
-        })
-    end
-
-    do
-        local row = overview:Row({ SearchIndex = "Session" })
-        row:Left():TitleStack({
-            Title = "Session",
-            Subtitle = "Saved mock data and equipped units are restored automatically.",
-        })
-    end
-end
-
 -- Features
 do
     local currencyForm = FeaturesTab:PageSection({
         Title = "Currency & Resources",
-        Subtitle = "Local visual values mirrored into the native client state where supported.",
+        Subtitle = "Manage currency and resource values.",
     }):Form()
 
     AddCascadeSlider(
         currencyForm,
         "Gems",
-        "Visual gem amount used by EXECO and local summon affordability.",
+        "Set your gem amount.",
         math.clamp(VisualState.Gems, 0, 1000000),
         0,
         1000000,
@@ -3401,7 +3373,7 @@ do
     AddCascadeSlider(
         currencyForm,
         "Gold",
-        "Visual gold amount shown by the native HUD.",
+        "Set your gold amount.",
         math.clamp(VisualState.Gold, 0, 10000000),
         0,
         10000000,
@@ -3415,7 +3387,7 @@ do
     AddCascadeSlider(
         currencyForm,
         "Trait Rerolls",
-        "Visual reroll currency mirrored to the local TraitReroll item state.",
+        "Set your trait reroll amount.",
         math.clamp(VisualState.TraitRerolls, 0, 100000),
         0,
         100000,
@@ -3430,13 +3402,13 @@ do
 
     local featureForm = FeaturesTab:PageSection({
         Title = "Feature Engine",
-        Subtitle = "Enable or disable EXECO's local rollback handlers.",
+        Subtitle = "Enable or disable EXECO features.",
     }):Form()
 
     AddCascadeToggle(
         featureForm,
         "Trait Rerolls",
-        "Intercept native trait rerolls and apply EXECO's local visual reroll engine.",
+        "Enable trait rerolls.",
         _G.AVTraitRollback,
         function(value)
             _G.AVTraitRollback = value
@@ -3447,7 +3419,7 @@ do
     AddCascadeToggle(
         featureForm,
         "Banner Summons",
-        "Intercept native banner summons and apply EXECO's local summon engine.",
+        "Enable banner summons.",
         _G.AVSummonRollback,
         function(value)
             _G.AVSummonRollback = value
@@ -3493,7 +3465,7 @@ do
     AddCascadeButton(
         actionForm,
         "Rejoin Current Server",
-        "Save the current mock state, queue EXECO for teleport, and rejoin this server.",
+        "Save your current state and rejoin this server.",
         "Rejoin",
         function()
             QueuePersistentSave()
@@ -3534,15 +3506,15 @@ do
 
     AddCascadeButton(
         dataForm,
-        "Delete All Mock Data",
-        "Clear persisted EXECO mock units, equipped slots, pity and visual session state.",
+        "Delete All Data",
+        "Clear saved units, equipped slots, pity, and session data.",
         "Delete",
         function()
             DeleteAllMockData()
             app:Notification({
                 App = "EXECO",
                 Title = "Data cleared",
-                Subtitle = "All mock data was deleted.",
+                Subtitle = "All saved data was deleted.",
                 Duration = 4,
             })
         end
