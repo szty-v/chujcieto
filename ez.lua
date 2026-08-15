@@ -222,11 +222,10 @@ local function SetSafeImage(imageLabel, imageId)
         else
             imageLabel.Image = FALLBACK_IMAGE
         end
-        for _, child in ipairs(imageLabel:GetChildren()) do
-            if child:IsA("UIGradient") then
-                child:Destroy()
-            end
-        end
+
+        -- Do NOT remove UIGradient children here. The native TraitIcon uses its
+        -- gradient to apply the trait's rarity colors. Destroying it made every
+        -- manually-set fallback icon appear colorless.
     end
 end
 
@@ -1364,7 +1363,7 @@ local function SettleTraitRerollVisuals(rolledTrait, previousAmount)
 end
 
 local LastRerollIntercept = 0
-local REROLL_INTERCEPT_WINDOW = 0.12
+local REROLL_INTERCEPT_WINDOW = 0.40
 local RerollInProgress = false
 
 local function PerformVisualReroll(unitID, confirmed, options)
@@ -1427,11 +1426,18 @@ local function PerformVisualReroll(unitID, confirmed, options)
         return true
     end)
 
-    RerollInProgress = false
     if not ok then
+        RerollInProgress = false
         warn("[EXECO] Visual trait reroll failed:", result)
         return false
     end
+
+    -- Hold the lock across the native TraitRollAmount observer's first reveal
+    -- frames so a rebuilt/button-repeat event cannot start another mock roll.
+    task.delay(0.35, function()
+        RerollInProgress = false
+    end)
+
     return result == true
 end
 
@@ -3271,6 +3277,11 @@ local function IsExactBannerSummon(remote, method, args)
         and type(args[4]) == "number"
 end
 
+-- The native reroll button can emit more than one matching request during a
+-- single animated click/rebuild. Gate synchronously in __namecall BEFORE
+-- task.defer so only one mock roll can ever be queued for a unit at a time.
+local TraitRerollRequestGate = {}
+
 local oldNamecall
 oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     local method = getnamecallmethod()
@@ -3321,7 +3332,17 @@ oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     end
 
     if _G.AVTraitRollback and IsExactTraitReroll(self, method, args) then
-        task.defer(PerformVisualReroll, args[3], args[4] == true)
+        local unitID = args[3]
+        local now = os.clock()
+        local allowedAt = TraitRerollRequestGate[unitID] or 0
+
+        if now >= allowedAt and not RerollInProgress then
+            TraitRerollRequestGate[unitID] = now + 0.40
+            task.defer(PerformVisualReroll, unitID, args[4] == true)
+        end
+
+        -- Always swallow matching mock requests, including duplicates inside
+        -- the gate window. They must never reach the server or queue a 2nd roll.
         return nil
     end
 
