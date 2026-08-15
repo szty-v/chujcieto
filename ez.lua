@@ -35,7 +35,7 @@ WaitForTeleportBootStability()
 -- ================================
 -- STARLIGHT INITIALIZATION
 -- ================================
--- Rejoin boots stay headless. Starlight is only constructed on a normal execute.
+-- Rejoin boots stay fully headless. Starlight is never fetched or constructed on a queued rejoin.
 local Starlight, NebulaIcons, Window
 
 local Players = game:GetService("Players")
@@ -187,7 +187,7 @@ local function SyncUnitInventoryCount()
     -- exact frame the inventory counter is repainted, so relying on UnitData
     -- alone left the native label stuck at e.g. 1/100.
     local realCount = 0
-    local ok, root = pcall(Fusion.peek, PlayerDataState)
+    local ok, root = pcall(function() return Fusion.peek(PlayerDataState) end)
     if ok and type(root) == "table" and type(root.UnitData) == "table" then
         for unitID, unitData in pairs(root.UnitData) do
             local isMock = MockUnitIDs and MockUnitIDs[unitID]
@@ -610,7 +610,7 @@ local JsonSafeCopy
 -- No server currency is changed.
 -- ================================
 local function GetTraitRerollItemName()
-    local info = Dependencies.Information
+    local info = type(Dependencies) == "table" and Dependencies.Information or nil
     local traits = info and info.Traits
     local name = traits and traits.RerollItem
 
@@ -670,7 +670,7 @@ local function SetLocalItemAmount(assetName, amount)
     --   Fusion.peek(GemValue) -> { Amount = 1650 }
     --
     -- Never replace Dependencies.ItemData itself. Update only the leaf Value.
-    local okItems, itemContainer = pcall(Fusion.peek, ItemDataState)
+    local okItems, itemContainer = pcall(function() return Fusion.peek(ItemDataState) end)
 
     if not okItems or type(itemContainer) ~= "table" then
         return false, "Dependencies.ItemData unavailable"
@@ -682,7 +682,7 @@ local function SetLocalItemAmount(assetName, amount)
         return false, "ItemData leaf state missing for " .. tostring(assetName)
     end
 
-    local okCurrent, currentRecord = pcall(Fusion.peek, itemState)
+    local okCurrent, currentRecord = pcall(function() return Fusion.peek(itemState) end)
 
     if not okCurrent or type(currentRecord) ~= "table" then
         return false, "Unable to read ItemData leaf for " .. tostring(assetName)
@@ -759,13 +759,13 @@ end
 
 local function GetNativeUnitDataSnapshot()
     if UnitDataState and type(UnitDataState) == "table" then
-        local ok, result = pcall(Fusion.peek, UnitDataState)
+        local ok, result = pcall(function() return Fusion.peek(UnitDataState) end)
         if ok and type(result) == "table" then
             return result
         end
     end
 
-    local ok, root = pcall(Fusion.peek, PlayerDataState)
+    local ok, root = pcall(function() return Fusion.peek(PlayerDataState) end)
     if ok and type(root) == "table" and type(root.UnitData) == "table" then
         return root.UnitData
     end
@@ -777,7 +777,7 @@ local function GetNativeUnitLeaf(unitID)
     local container = UnitDataState
 
     if type(UnitDataState) == "table" then
-        local okPeek, resolved = pcall(Fusion.peek, UnitDataState)
+        local okPeek, resolved = pcall(function() return Fusion.peek(UnitDataState) end)
         if okPeek and type(resolved) == "table" then
             container = resolved
         end
@@ -794,7 +794,7 @@ local function ReadNativeUnitRecord(unitID)
     local leaf = GetNativeUnitLeaf(unitID)
 
     if type(leaf) == "table" and type(leaf.set) == "function" then
-        local ok, value = pcall(Fusion.peek, leaf)
+        local ok, value = pcall(function() return Fusion.peek(leaf) end)
         if ok and type(value) == "table" then
             return value, leaf
         end
@@ -802,7 +802,7 @@ local function ReadNativeUnitRecord(unitID)
         return leaf, nil
     end
 
-    local okRoot, root = pcall(Fusion.peek, PlayerDataState)
+    local okRoot, root = pcall(function() return Fusion.peek(PlayerDataState) end)
     if okRoot and type(root) == "table" and type(root.UnitData) == "table" then
         local value = root.UnitData[unitID]
         if type(value) == "table" then
@@ -1295,7 +1295,7 @@ local SummonRandom = Random.new()
 local SummonInProgress = false
 
 local function ResolveStateValue(value)
-    local ok, resolved = pcall(Fusion.peek, value)
+    local ok, resolved = pcall(function() return Fusion.peek(value) end)
     if ok then
         return resolved
     end
@@ -1303,7 +1303,7 @@ local function ResolveStateValue(value)
 end
 
 local function GetBannerSnapshot(bannerID)
-    local ok, root = pcall(Fusion.peek, BannerDataState)
+    local ok, root = pcall(function() return Fusion.peek(BannerDataState) end)
     if not ok or type(root) ~= "table" then
         return nil, "BannerData peek failed"
     end
@@ -2174,7 +2174,7 @@ local function IsMockUnitID(unitID)
         return true
     end
 
-    local ok, root = pcall(Fusion.peek, PlayerDataState)
+    local ok, root = pcall(function() return Fusion.peek(PlayerDataState) end)
     if ok and type(root) == "table" and type(root.UnitData) == "table" then
         data = root.UnitData[unitID]
         if type(data) == "table" and data.BLACKSIGILMock == true then
@@ -2192,7 +2192,7 @@ local function GetCurrentMockUnitData(unitID)
         return units[unitID]
     end
 
-    local ok, root = pcall(Fusion.peek, PlayerDataState)
+    local ok, root = pcall(function() return Fusion.peek(PlayerDataState) end)
     if ok and type(root) == "table" and type(root.UnitData) == "table"
         and type(root.UnitData[unitID]) == "table" then
         return root.UnitData[unitID]
@@ -2229,7 +2229,7 @@ local function SetMockInventoryEquipped(unitID, equipped)
 end
 
 local function GetRealHotbarSnapshot()
-    local ok, hotbar = pcall(Fusion.peek, HotbarState)
+    local ok, hotbar = pcall(function() return Fusion.peek(HotbarState) end)
     if ok and type(hotbar) == "table" then
         return hotbar
     end
@@ -2703,7 +2703,7 @@ local function GetFollowerExtraData(unitID, slot)
         AccessoryData = {}
     }
 
-    local ok, playerRoot = pcall(Fusion.peek, PlayerDataState)
+    local ok, playerRoot = pcall(function() return Fusion.peek(PlayerDataState) end)
     if ok and type(playerRoot) == "table" then
         if unitData.Skin and type(playerRoot.SkinData) == "table" then
             extra.SkinData = CloneMap(playerRoot.SkinData[unitData.Skin])
@@ -2883,7 +2883,7 @@ local function RestorePersistentMockData()
         return
     end
 
-    local okRoot, currentRoot = pcall(Fusion.peek, PlayerDataState)
+    local okRoot, currentRoot = pcall(function() return Fusion.peek(PlayerDataState) end)
     if not okRoot or type(currentRoot) ~= "table" then
         return
     end
@@ -3014,7 +3014,7 @@ local function DeleteAllMockData()
     end
 
     -- Remove every EXECO-created unit from both local UnitData states.
-    local okRoot, currentRoot = pcall(Fusion.peek, PlayerDataState)
+    local okRoot, currentRoot = pcall(function() return Fusion.peek(PlayerDataState) end)
     if okRoot and type(currentRoot) == "table" then
         local newUnits = CloneMap(currentRoot.UnitData)
         for unitID, unitData in pairs(newUnits) do
@@ -3280,6 +3280,14 @@ if not __BLACKSIGIL_TELEPORT_BOOT and Starlight and Window then
             }, "EXECO_RollbackBox")
         end)
 
+        local ActionsBox = SafeUI("actions groupbox", function()
+            return FeaturesTab:CreateGroupbox({
+                Name = "Actions",
+                Icon = Icon("restart_alt", "Material"),
+                Column = 2
+            }, "EXECO_ActionsBox")
+        end)
+
         if ResourcesBox then
             SafeUI("gems slider", function()
                 return ResourcesBox:CreateSlider({
@@ -3356,6 +3364,31 @@ if not __BLACKSIGIL_TELEPORT_BOOT and Starlight and Window then
                         SafeLog("Banner Summons", _G.AVSummonRollback and "Enabled" or "Disabled")
                     end
                 }, "EXECO_BannerRollback")
+            end)
+        end
+
+        if ActionsBox then
+            SafeUI("rejoin server", function()
+                return ActionsBox:CreateButton({
+                    Name = "Rejoin Server",
+                    Icon = Icon("restart_alt", "Material"),
+                    Tooltip = "Save EXECO state and reconnect. The queued rejoin runs headless without reopening Starlight.",
+                    IndicatorStyle = 1,
+                    Callback = function()
+                        QueuePersistentSave()
+                        if SavePersistentState then
+                            pcall(SavePersistentState)
+                        end
+
+                        if not QueueBlackSigilForTeleport() then
+                            warn("[EXECO] Auto-execute could not be queued; rejoin cancelled to preserve silent boot")
+                            return
+                        end
+
+                        task.wait(0.15)
+                        TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
+                    end
+                }, "EXECO_RejoinServer")
             end)
         end
     end
