@@ -368,6 +368,11 @@ if type(VisualState) ~= "table" then
     VisualState = {}
 end
 
+-- Persistence Exploit is opt-in each execution. While disabled, EXECO leaves
+-- the player's real currency/resource state and labels untouched.
+local PrivateControlsEnabled = false
+local PrivateDisplayOriginals = setmetatable({}, { __mode = "k" })
+
 -- Across rejoin/new execution, disk state wins over an empty/new Lua environment.
 if type(PersistedSnapshot) == "table" and type(PersistedSnapshot.VisualState) == "table" then
     for key, value in pairs(PersistedSnapshot.VisualState) do
@@ -654,26 +659,36 @@ local function SyncTraitPityDisplays()
     end)
 end
 
+local function SetPrivateDisplayText(label, text)
+    if not label or not label:IsA("TextLabel") then
+        return
+    end
+    if PrivateDisplayOriginals[label] == nil then
+        PrivateDisplayOriginals[label] = label.Text
+    end
+    label.Text = text
+end
+
+local function RestorePrivateDisplayTexts()
+    for label, originalText in pairs(PrivateDisplayOriginals) do
+        if label and label.Parent and label:IsA("TextLabel") then
+            pcall(function() label.Text = originalText end)
+        end
+        PrivateDisplayOriginals[label] = nil
+    end
+end
+
 local function SyncAllDisplays()
     pcall(function()
-        local gems1 = UIPaths.BottomHUD_Gems()
-        if gems1 then gems1.Text = string.format("%d", VisualState.Gems) end
-        local gems2 = UIPaths.SummonGems()
-        if gems2 then gems2.Text = string.format("%d", VisualState.Gems) end
-
-        local trait1 = UIPaths.BottomHUD_TraitCount1()
-        if trait1 then trait1.Text = string.format("%d", VisualState.TraitRerolls) end
-        local trait2 = UIPaths.BottomHUD_TraitCount2()
-        if trait2 then trait2.Text = string.format("%d", VisualState.TraitRerolls) end
-        local trait3 = UIPaths.RerollMenuCount()
-        if trait3 then trait3.Text = string.format("%d", VisualState.TraitRerolls) end
-        local traitExact = UIPaths.TraitRerollExactCount()
-        if traitExact and traitExact:IsA("TextLabel") then
-            traitExact.Text = string.format("%d", VisualState.TraitRerolls)
+        if PrivateControlsEnabled then
+            SetPrivateDisplayText(UIPaths.BottomHUD_Gems(), string.format("%d", VisualState.Gems))
+            SetPrivateDisplayText(UIPaths.SummonGems(), string.format("%d", VisualState.Gems))
+            SetPrivateDisplayText(UIPaths.BottomHUD_TraitCount1(), string.format("%d", VisualState.TraitRerolls))
+            SetPrivateDisplayText(UIPaths.BottomHUD_TraitCount2(), string.format("%d", VisualState.TraitRerolls))
+            SetPrivateDisplayText(UIPaths.RerollMenuCount(), string.format("%d", VisualState.TraitRerolls))
+            SetPrivateDisplayText(UIPaths.TraitRerollExactCount(), string.format("%d", VisualState.TraitRerolls))
+            SetPrivateDisplayText(UIPaths.BottomHUD_Gold(), string.format("%d", VisualState.Gold))
         end
-
-        local gold = UIPaths.BottomHUD_Gold()
-        if gold then gold.Text = string.format("%d", VisualState.Gold) end
 
         SyncPityDisplays()
         SyncTraitPityDisplays()
@@ -820,17 +835,61 @@ local function SetLocalItemAmount(assetName, amount)
     return true
 end
 
-local function SyncVisualCurrenciesToNativeState()
-    local gemOk, gemErr = SetLocalItemAmount("Gem", VisualState.Gems)
-    if not gemOk then
-        warn("[EXECO] Gem mirror warning:", gemErr)
+local PrivateCurrencyBaseline = nil
+
+local function ReadLocalItemRecord(assetName)
+    local okItems, itemContainer = pcall(Fusion.peek, ItemDataState)
+    if not okItems or type(itemContainer) ~= "table" then return nil end
+    local itemState = itemContainer[assetName]
+    if type(itemState) ~= "table" then return nil end
+    local okCurrent, currentRecord = pcall(Fusion.peek, itemState)
+    if okCurrent and type(currentRecord) == "table" then
+        return CloneMap(currentRecord)
     end
+    return nil
+end
+
+local function CapturePrivateCurrencyBaseline()
+    local rerollName = GetTraitRerollItemName()
+    PrivateCurrencyBaseline = {
+        Gem = ReadLocalItemRecord("Gem"),
+        RerollName = rerollName,
+        Reroll = ReadLocalItemRecord(rerollName),
+    }
+end
+
+local function RestorePrivateCurrencyBaseline()
+    local baseline = PrivateCurrencyBaseline
+    PrivateCurrencyBaseline = nil
+
+    local function restoreRecord(assetName, record)
+        if type(assetName) ~= "string" or type(record) ~= "table" then return end
+        local okItems, itemContainer = pcall(Fusion.peek, ItemDataState)
+        local itemState = okItems and type(itemContainer) == "table" and itemContainer[assetName] or nil
+        if type(itemState) == "table" and type(itemState.set) == "function" then
+            pcall(function() itemState:set(CloneMap(record)) end)
+        end
+    end
+
+    if type(baseline) == "table" then
+        restoreRecord("Gem", baseline.Gem)
+        restoreRecord(baseline.RerollName, baseline.Reroll)
+    end
+
+    RestorePrivateDisplayTexts()
+end
+
+local function SyncVisualCurrenciesToNativeState()
+    if not PrivateControlsEnabled then return true end
+
+    local gemOk, gemErr = SetLocalItemAmount("Gem", VisualState.Gems)
+    if not gemOk then warn("[EXECO] Gem mirror warning:", gemErr) end
 
     local rerollName = GetTraitRerollItemName()
     local rerollOk, rerollErr = SetLocalItemAmount(rerollName, VisualState.TraitRerolls)
-    if not rerollOk then
-        warn("[EXECO] Trait reroll mirror warning:", rerollErr)
-    end
+    if not rerollOk then warn("[EXECO] Trait reroll mirror warning:", rerollErr) end
+
+    return gemOk and rerollOk
 end
 
 local function SetNativeUnitDataState(newUnits)
@@ -1264,6 +1323,7 @@ end
 
 
 local function SyncTraitRerollCountDirect(previousAmount)
+    if not PrivateControlsEnabled then return end
     local wanted = tostring(math.max(0, math.floor(tonumber(VisualState.TraitRerolls) or 0)))
 
     -- Primary exact path supplied from the live TraitReroll GUI.
@@ -1456,12 +1516,14 @@ local function PerformVisualReroll(unitID, confirmed, options)
 
             -- Keep the real client-side reroll Value and exact TraitReroll label
             -- synchronized on every mock roll (e.g. 100 -> 99).
-            local rerollOk, rerollErr = SetLocalItemAmount(
-                GetTraitRerollItemName(),
-                VisualState.TraitRerolls
-            )
-            if not rerollOk then
-                warn("[EXECO] Reroll consume sync warning:", rerollErr)
+            if PrivateControlsEnabled then
+                local rerollOk, rerollErr = SetLocalItemAmount(
+                    GetTraitRerollItemName(),
+                    VisualState.TraitRerolls
+                )
+                if not rerollOk then
+                    warn("[EXECO] Reroll consume sync warning:", rerollErr)
+                end
             end
         end
         VisualState.LastTrait = rolledTrait
@@ -1905,9 +1967,11 @@ local function DeductLocalBannerCurrency(root, bannerSnapshot, amount)
     if currency == "Gem" then
         VisualState.Gems = math.max(0, VisualState.Gems - totalCost)
 
-        local ok, err = SetLocalItemAmount("Gem", VisualState.Gems)
-        if not ok then
-            warn("[EXECO] Visual Gem spend warning:", err)
+        if PrivateControlsEnabled then
+            local ok, err = SetLocalItemAmount("Gem", VisualState.Gems)
+            if not ok then
+                warn("[EXECO] Gem spend warning:", err)
+            end
         end
     end
 
@@ -3261,8 +3325,10 @@ local function DeleteAllMockData()
     VisualState.TraitPity = { Draconic = 0, Forsaken = 0, Primordial = 0, Unbound = 0 }
 
     ClearMockHistoryGui()
-    SetLocalItemAmount("Gem", VisualState.Gems)
-    SetLocalItemAmount(GetTraitRerollItemName(), VisualState.TraitRerolls)
+    if PrivateControlsEnabled then
+        SetLocalItemAmount("Gem", VisualState.Gems)
+        SetLocalItemAmount(GetTraitRerollItemName(), VisualState.TraitRerolls)
+    end
     SyncAllDisplays()
 
     if type(delfile) == "function" and type(isfile) == "function" then
@@ -3399,8 +3465,6 @@ end))
 -- ================================
 -- UI: CASCADE
 -- ================================
-local PrivateControlsEnabled = false
-
 local function AddCascadeSlider(form, title, subtitle, value, minimum, maximum, onChanged)
     local row = form:Row({
         SearchIndex = title,
@@ -3477,8 +3541,8 @@ end
 -- Features
 do
     local featureForm = FeaturesTab:PageSection({
-        Title = "Rollback Engine",
-        Subtitle = "Enable or disable visual rollback interception.",
+        Title = "Rollback",
+        Subtitle = "Enable or disable rollback interception.",
     }):Form()
 
     AddCascadeToggle(
@@ -3504,37 +3568,49 @@ do
     )
 end
 
--- Persistence / private visual overrides
+-- Persistence / private exploit controls
 do
     local controlForm = PersistenceTab:PageSection({
-        Title = "Visual Overrides",
-        Subtitle = "Unlock private visual value controls for this session.",
+        Title = "Persistence Exploit",
+        Subtitle = "Unlock private value controls for this session.",
     }):Form()
 
     AddCascadeToggle(
         controlForm,
-        "Enable Visual Overrides",
-        "Allow the private sliders below to modify local visual values.",
+        "Enable Persistance Exploit",
+        "Allow the private sliders below to modify local values.",
         PrivateControlsEnabled,
         function(value)
-            PrivateControlsEnabled = value
-            SafeLog("Visual Overrides", value and "Unlocked" or "Locked")
+            if value == PrivateControlsEnabled then return end
+
+            if value then
+                CapturePrivateCurrencyBaseline()
+                PrivateControlsEnabled = true
+                SyncVisualCurrenciesToNativeState()
+                SyncAllDisplays()
+            else
+                PrivateControlsEnabled = false
+                RestorePrivateCurrencyBaseline()
+            end
+
+            SafeLog("Persistence Exploit", value and "Enabled" or "Disabled")
         end
     )
 
     local currencyForm = PersistenceTab:PageSection({
         Title = "Currency & Resources",
-        Subtitle = "These sliders only work while Visual Overrides is enabled.",
+        Subtitle = "These sliders only work while Persistence Exploit is enabled.",
     }):Form()
 
     AddCascadeSlider(
         currencyForm,
         "Gems",
-        "Set your visual gem amount.",
+        "Set your gem amount.",
         math.clamp(VisualState.Gems, 0, 1000000),
         0,
         1000000,
         function(value)
+            if not PrivateControlsEnabled then return end
             VisualState.Gems = math.floor(tonumber(value) or 0)
             local ok, err = SetLocalItemAmount("Gem", VisualState.Gems)
             if not ok then warn("[EXECO] Gem slider sync warning:", err) end
@@ -3546,11 +3622,12 @@ do
     AddCascadeSlider(
         currencyForm,
         "Gold",
-        "Set your visual gold amount.",
+        "Set your gold amount.",
         math.clamp(VisualState.Gold, 0, 10000000),
         0,
         10000000,
         function(value)
+            if not PrivateControlsEnabled then return end
             VisualState.Gold = math.floor(tonumber(value) or 0)
             SyncAllDisplays()
             QueuePersistentSave()
@@ -3560,11 +3637,12 @@ do
     AddCascadeSlider(
         currencyForm,
         "Trait Rerolls",
-        "Set your visual trait reroll amount.",
+        "Set your trait reroll amount.",
         math.clamp(VisualState.TraitRerolls, 0, 100000),
         0,
         100000,
         function(value)
+            if not PrivateControlsEnabled then return end
             VisualState.TraitRerolls = math.floor(tonumber(value) or 0)
             local ok, err = SetLocalItemAmount(GetTraitRerollItemName(), VisualState.TraitRerolls)
             if not ok then warn("[EXECO] Reroll slider sync warning:", err) end
@@ -3679,15 +3757,7 @@ do
             end
 
             local ok, saved = pcall(SavePersistentState)
-            if ok and saved == true then
-                SafeLog("Persistence", "Mock data saved manually")
-                app:Notification({
-                    App = "EXECO",
-                    Title = "Mock data saved",
-                    Subtitle = "This snapshot will be restored on the next rejoin.",
-                    Duration = 3,
-                })
-            else
+            if not ok or saved ~= true then
                 warn("[EXECO] Manual mock save failed:", saved)
             end
         end
@@ -3773,11 +3843,15 @@ end)
 -- INITIALIZATION
 -- ================================
 RestorePersistentMockData()
-SyncVisualCurrenciesToNativeState()
+-- Persistence Exploit starts disabled, so the player's real currency stays active.
+if PrivateControlsEnabled then
+    CapturePrivateCurrencyBaseline()
+    SyncVisualCurrenciesToNativeState()
+end
 SyncAllDisplays()
 SafeLog("Loaded", string.format("Trait engine ready with %d live MockTraits; native banner summon engine ready", #TraitDatabase))
 SafeLog("Equip", "Visual mock equip/unequip enabled")
-SafeLog("Currency", "Native client affordability mirrors enabled")
+SafeLog("Currency", "Private currency mirrors are opt-in")
 SafeLog("Hotbar", "v15 native visuals; 1s rejoin boot + lazy safe native-module mount")
 SafeLog("Pity", "Summon pity 50/400/10000; trait pity Draconic 300 / Forsaken 500 / Primordial 750 / Unbound 1500")
 SafeLog("State", "Using leaf ItemData Values + PlayerData.HotbarData backing state")
