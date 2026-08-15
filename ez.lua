@@ -60,9 +60,12 @@ if not __BLACKSIGIL_TELEPORT_BOOT then
     Window = Luna:CreateWindow({
         Name = "EXECO",
         Subtitle = "Anime Expeditions",
-        LogoID = "10734897102",
+        LogoID = "82795327169782",
         LoadingEnabled = false,
-        ConfigSettings = { RootFolder = nil, ConfigFolder = "EXECO" },
+        ConfigSettings = {
+            RootFolder = nil,
+            ConfigFolder = "EXECO"
+        },
         KeySystem = false
     })
 
