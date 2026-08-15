@@ -997,7 +997,21 @@ local function ApplyTraitToNativeLocalState(unitID, rolledTrait)
     newUnits[unitID] = newUnit
     MockUnitIDs[unitID] = true
 
-    local okWrite, writeErr = SetNativeUnitDataState(newUnits)
+    -- IMPORTANT: TraitReroll's AssetDataProcessor is bound to the individual
+    -- Dependencies.UnitData[unitID] state when that leaf exists. Replacing the
+    -- whole UnitData container can update persistence/inventory without waking
+    -- the already-mounted TraitReroll UnitProcessor, which is why the reroll
+    -- counter/pity changed while the old trait name/icon stayed on screen.
+    --
+    -- Write the unit leaf first so the native Trait/Unit processors receive the
+    -- exact reactive change (Trait + TraitRollAmount) together.
+    local okWrite, writeErr = WriteNativeUnitRecord(unitID, newUnit)
+    if not okWrite then
+        -- Last-resort compatibility fallback for builds where UnitData is one
+        -- aggregate Fusion Value rather than a table of leaf Values.
+        okWrite, writeErr = SetNativeUnitDataState(newUnits)
+    end
+
     if not okWrite then
         return false, "UnitData update failed: " .. tostring(writeErr)
     end
@@ -1304,19 +1318,43 @@ local function SyncTraitRerollCountDirect(previousAmount)
 end
 
 local function SettleTraitRerollVisuals(rolledTrait, previousAmount)
-    -- Let the game's native UnitProcessor -> TraitProcessor own the trait name,
-    -- icon, gradient, rarity color and description. We only keep the visual
-    -- reroll counter/pity synchronized while the menu settles.
-    local function apply()
+    -- Native UnitProcessor/TraitProcessor should repaint the trait after the
+    -- leaf-state write above. Keep resource/pity values pinned while Fusion
+    -- settles, and use the direct renderer only as a delayed safety net if the
+    -- mounted menu still shows the previous trait.
+    local function applyCounters()
         SyncTraitRerollCountDirect(previousAmount)
         SyncTraitPityDisplays()
     end
 
-    apply()
+    local function traitIsVisible()
+        local label = UIPaths.TraitName()
+        if not label or not label:IsA("TextLabel") then
+            return false
+        end
+
+        local wanted = string.lower(tostring(rolledTrait and rolledTrait.Name or ""))
+        local current = string.lower(tostring(label.Text or ""))
+        return wanted ~= "" and string.find(current, wanted, 1, true) ~= nil
+    end
+
+    applyCounters()
+
     task.spawn(function()
-        for _, delayTime in ipairs({0.03, 0.08, 0.16, 0.30}) do
+        for _, delayTime in ipairs({0.03, 0.08, 0.16, 0.30, 0.55}) do
             task.wait(delayTime)
-            apply()
+            applyCounters()
+        end
+
+        -- Do not stomp the game's normal reveal transition immediately.
+        -- Only repair the label/icon/info if the native reactive UI failed to
+        -- pick up the new mock trait after its normal settle window.
+        if not traitIsVisible() then
+            RenderTraitResult(rolledTrait)
+            task.wait(0.12)
+            if not traitIsVisible() then
+                RenderTraitResult(rolledTrait)
+            end
         end
     end)
 end
