@@ -1787,6 +1787,7 @@ local function BuildMockUnitEntry(currentUnits, candidate)
 
     unit.Asset = asset
     unit.BLACKSIGILMock = true
+    unit.Level = 1
     unit.ObtainedAt = os.time()
     unit.Favorited = nil
     unit.Locked = nil
@@ -3030,6 +3031,7 @@ local function RestorePersistentMockData()
         if type(unitID) == "string" and type(unitData) == "table" then
             local copy = CloneMap(unitData)
             copy.BLACKSIGILMock = true
+            copy.Level = 1
             newUnits[unitID] = copy
             MockUnitIDs[unitID] = true
             restored = restored + 1
