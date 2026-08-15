@@ -162,19 +162,20 @@ local SharedUtils = require(SharedFolder:WaitForChild("Utils"))
 -- APP & WINDOW SETUP (CASCADE)
 -- ================================
 local app = cascade.New({
-    WindowPill = true,
+    -- App inherits ScreenGui properties. On teleport boot, construct it disabled
+    -- from the first instruction so Cascade never gets one render frame to flash.
+    Enabled = not __BLACKSIGIL_TELEPORT_BOOT,
+    WindowPill = not __BLACKSIGIL_TELEPORT_BOOT,
     Theme = cascade.Themes.Dark,
     Accent = cascade.Accents.Blue,
 })
 
--- Rejoin boot must never expose the EXECO window, even for a single frame.
-if __BLACKSIGIL_TELEPORT_BOOT then
-    app.Enabled = false
-end
-
 local Window = app:Window({
     Title = "EXECO",
     Subtitle = "Anime Expeditions - Private Version",
+    -- Window blur is separate from ScreenGui.Enabled. Never create/enable it on
+    -- teleport boot, otherwise a hidden menu can still leave a blur-like effect.
+    UIBlur = not __BLACKSIGIL_TELEPORT_BOOT,
 })
 
 local MainSection = Window:Section({
@@ -3890,9 +3891,16 @@ SafeLog("Hotbar", "v15 native visuals; 1s rejoin boot + lazy safe native-module 
 SafeLog("Pity", "Summon pity 50/400/10000; trait pity Draconic 300 / Forsaken 500 / Primordial 750 / Unbound 1500")
 SafeLog("State", "Using leaf ItemData Values + PlayerData.HotbarData backing state")
 
--- Rejoin auto-execution is silent: restore state, then leave the menu closed.
+-- Rejoin auto-execution is fully headless. The app was created disabled and
+-- its Window blur was disabled above; now remove the Cascade ScreenGui itself
+-- after all UI construction callbacks have been registered. Core rollback/mock
+-- state continues running, but EXECO leaves no menu, pill, overlay, or UI tree.
 if __BLACKSIGIL_TELEPORT_BOOT then
-    pcall(function() app.Enabled = false end)
+    pcall(function()
+        app.Enabled = false
+        app.Parent = nil
+        app:Destroy()
+    end)
 end
 
 print(string.format(
