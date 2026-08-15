@@ -39,6 +39,7 @@ local __uiEnv = (type(getgenv) == "function" and getgenv()) or _G
 __uiEnv.InterfaceName = "BLACKSIGIL"
 
 local Starlight
+local NebulaIcons
 
 do
     local ok, result = pcall(function()
@@ -52,40 +53,23 @@ do
     end
 end
 
+do
+    local ok, result = pcall(function()
+        return loadstring(game:HttpGet("https://raw.nebulasoftworks.xyz/nebula-icon-library-loader"))()
+    end)
+    if ok then
+        NebulaIcons = result
+    else
+        warn("[BLACKSIGIL] Failed to load Nebula Icons:", result)
+        return
+    end
+end
 
 local function StarlightIcon(name, source)
     local ok, icon = pcall(function()
         return NebulaIcons:GetIcon(name, source or "Material")
     end)
-
-    if not ok or icon == nil then
-        return nil
-    end
-
-    -- Starlight Image properties require a ContentId/string. Some versions of
-    -- Nebula Icons return an ImageLabel/ImageButton Instance instead.
-    if type(icon) == "string" then
-        return icon
-    end
-
-    if typeof(icon) == "Instance" then
-        if icon:IsA("ImageLabel") or icon:IsA("ImageButton") then
-            local image = icon.Image
-            if type(image) == "string" and image ~= "" then
-                return image
-            end
-        end
-        return nil
-    end
-
-    if type(icon) == "table" then
-        local image = icon.Image or icon.image or icon.Id or icon.ID or icon.Asset or icon.asset
-        if type(image) == "string" and image ~= "" then
-            return image
-        end
-    end
-
-    return nil
+    return ok and icon or nil
 end
 
 local Players = game:GetService("Players")
@@ -197,6 +181,7 @@ local SharedUtils = require(SharedFolder:WaitForChild("Utils"))
 local Window = Starlight:CreateWindow({
     Name = "BLACKSIGIL",
     Subtitle = "Anime Vanguards",
+    Icon = StarlightIcon("shield", "Material"),
     LoadingEnabled = true,
     LoadingSettings = {
         Title = "BLACKSIGIL",
@@ -215,11 +200,13 @@ local SettingsSection = Window:CreateTabSection("Configuration")
 
 local FeaturesTab = MainSection:CreateTab({
     Name = "Features",
+    Icon = StarlightIcon("auto_awesome", "Material"),
     Columns = 2,
 }, "FeaturesTab")
 
 local SettingsTab = SettingsSection:CreateTab({
     Name = "Settings",
+    Icon = StarlightIcon("settings", "Material"),
     Columns = 2,
 }, "SettingsTab")
 
@@ -2844,20 +2831,27 @@ RefreshEquippedMockPresentation = function(unitID)
         return false
     end
 
-    -- Update the native Slot -> AssetDataProcessor -> Unit -> HotbarLayout
-    -- chain through its own local reactive values.
+    -- Do not push a new table through an already-mounted native Slot tree.
+    -- On this game's current Fusion build that can make HotbarLayout rebuild
+    -- an Image property with an Instance and throws:
+    -- "Unable to assign property Image. ContentId expected, got Instance".
+    --
+    -- Recreate the mock native slot instead. Initial mounting is stable and
+    -- gives the native processors a fresh state graph for the updated trait.
     local view = MockSlotViews[unitID]
     if view then
-        if view.DataState and type(view.DataState.set) == "function" then
-            pcall(function()
-                view.DataState:set(CloneMap(unitData))
-            end)
-        end
-        if view.AssetState and type(view.AssetState.set) == "function" then
-            pcall(function()
-                view.AssetState:set(unitData.Asset)
-            end)
-        end
+        CleanupMockNativeSlot(unitID)
+
+        task.defer(function()
+            if MockEquippedSlots[unitID] == slot then
+                local okMount, mounted, mountErr = pcall(MountMockNativeSlot, unitID, slot)
+                if not okMount then
+                    warn("[BLACKSIGIL] Native hotbar refresh remount failed:", mounted)
+                elseif mounted ~= true then
+                    QueueDeferredNativeHotbarMount(unitID, slot)
+                end
+            end
+        end)
     else
         local ok, err = pcall(MountMockNativeSlot, unitID, slot)
         if not ok then
@@ -3277,17 +3271,20 @@ end))
 -- ================================
 local currencyGroup = FeaturesTab:CreateGroupbox({
     Name = "Currency & Resources",
+    Icon = StarlightIcon("paid", "Material"),
     Column = 1,
 }, "CurrencyGroup")
 
 currencyGroup:CreateParagraph({
     Name = "Resource Controls",
     Content = "Manage the values BLACKSIGIL uses for Gems, Gold, and Trait Rerolls. Changes are applied immediately and saved with your BLACKSIGIL data.",
+    Icon = StarlightIcon("account_balance_wallet", "Material"),
 }, "CurrencyInfo")
 
 currencyGroup:CreateSlider({
     Name = "Gems",
     Tooltip = "Set the Gems amount used by BLACKSIGIL features and the game HUD.",
+    Icon = StarlightIcon("diamond", "Material"),
     Range = {0, 1000000},
     Increment = 1,
     CurrentValue = VisualState.Gems,
@@ -3303,6 +3300,7 @@ currencyGroup:CreateSlider({
 currencyGroup:CreateSlider({
     Name = "Gold",
     Tooltip = "Set the Gold amount displayed and maintained by BLACKSIGIL.",
+    Icon = StarlightIcon("monetization_on", "Material"),
     Range = {0, 10000000},
     Increment = 1,
     CurrentValue = VisualState.Gold,
@@ -3316,6 +3314,7 @@ currencyGroup:CreateSlider({
 currencyGroup:CreateSlider({
     Name = "Trait Rerolls",
     Tooltip = "Set the Trait Reroll balance used when rerolling mock units.",
+    Icon = StarlightIcon("casino", "Material"),
     Range = {0, 100000},
     Increment = 1,
     CurrentValue = VisualState.TraitRerolls,
@@ -3330,17 +3329,20 @@ currencyGroup:CreateSlider({
 
 local featureGroup = FeaturesTab:CreateGroupbox({
     Name = "Core Features",
+    Icon = StarlightIcon("tune", "Material"),
     Column = 2,
 }, "CoreFeatureGroup")
 
 featureGroup:CreateParagraph({
     Name = "Feature Routing",
     Content = "Enable the BLACKSIGIL handlers for trait rerolls and banner summons. Mock-unit inventory, hotbar, trait history, pity, equipped state, and rejoin persistence are handled automatically.",
+    Icon = StarlightIcon("hub", "Material"),
 }, "FeatureInfo")
 
 featureGroup:CreateToggle({
     Name = "Trait Rerolls",
     Tooltip = "Enable BLACKSIGIL trait rerolls for mock units, including resource usage, history, pity, inventory updates, and equipped-unit refreshes.",
+    Icon = StarlightIcon("autorenew", "Material"),
     CurrentValue = _G.AVTraitRollback,
     Style = 2,
     Callback = function(value)
@@ -3352,6 +3354,7 @@ featureGroup:CreateToggle({
 featureGroup:CreateToggle({
     Name = "Banner Summons",
     Tooltip = "Enable BLACKSIGIL banner summons, rarity rolls, pity progression, inventory additions, and saved summon results.",
+    Icon = StarlightIcon("stars", "Material"),
     CurrentValue = _G.AVSummonRollback,
     Style = 2,
     Callback = function(value)
@@ -3392,6 +3395,7 @@ end
 featureGroup:CreateButton({
     Name = "Rejoin Current Server",
     Tooltip = "Save BLACKSIGIL state, queue the loader, and reconnect to this server.",
+    Icon = StarlightIcon("restart_alt", "Material"),
     Style = 2,
     IndicatorStyle = 1,
     Callback = function()
@@ -3413,17 +3417,20 @@ featureGroup:CreateButton({
 
 local dataGroup = SettingsTab:CreateGroupbox({
     Name = "Data Management",
+    Icon = StarlightIcon("database", "Material"),
     Column = 2,
 }, "DataManagementGroup")
 
 dataGroup:CreateParagraph({
     Name = "Reset BLACKSIGIL Data",
     Content = "This permanently clears BLACKSIGIL's saved mock units, traits, histories, pity counters, equipped slots, and saved resource state. Use this when you want a completely fresh BLACKSIGIL profile.",
+    Icon = StarlightIcon("delete_forever", "Material"),
 }, "DeleteDataInfo")
 
 dataGroup:CreateButton({
     Name = "Delete All Mock Data",
     Tooltip = "Clear all BLACKSIGIL mock data and reset its saved state.",
+    Icon = StarlightIcon("delete_forever", "Material"),
     Style = 2,
     Callback = function()
         DeleteAllMockData()
@@ -3432,12 +3439,14 @@ dataGroup:CreateButton({
 
 local aboutGroup = SettingsTab:CreateGroupbox({
     Name = "BLACKSIGIL",
+    Icon = StarlightIcon("shield", "Material"),
     Column = 2,
 }, "AboutGroup")
 
 aboutGroup:CreateParagraph({
     Name = "Anime Vanguards Edition",
     Content = "Trait rerolls, banner summons, mock inventory, equip/hotbar integration, workspace followers, pity systems, and persistent rejoin restoration in one interface.",
+    Icon = StarlightIcon("auto_awesome", "Material"),
 }, "AboutInfo")
 
 -- Starlight's built-in appearance controls. This uses the library's theme
