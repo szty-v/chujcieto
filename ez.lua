@@ -167,9 +167,14 @@ local app = cascade.New({
     Accent = cascade.Accents.Blue,
 })
 
+-- Rejoin boot must never expose the EXECO window, even for a single frame.
+if __BLACKSIGIL_TELEPORT_BOOT then
+    app.Enabled = false
+end
+
 local Window = app:Window({
     Title = "EXECO",
-    Subtitle = "Anime Expeditions",
+    Subtitle = "Anime Expeditions - Private Version",
 })
 
 local MainSection = Window:Section({
@@ -181,11 +186,16 @@ local FeaturesTab = MainSection:Tab({
     Title = "Features",
 })
 
+local PersistenceTab = MainSection:Tab({
+    Title = "Persistence",
+})
+
 local SettingsTab = MainSection:Tab({
     Title = "Settings",
 })
 
 -- Silent teleport boot: keep Cascade hidden while persistent mock state restores.
+-- Disable it before any user-facing notification/menu behavior can run.
 if __BLACKSIGIL_TELEPORT_BOOT then
     app.Enabled = false
 end
@@ -313,6 +323,7 @@ end
 local PERSISTENCE_FILE = "EXECO_mock_state_v15.json"
 local PersistedSnapshot = nil
 local SavePersistentState = nil
+local PersistentStateDirty = false
 local persistQueued = false
 
 local function ReadPersistentSnapshot()
@@ -339,21 +350,10 @@ local function ReadPersistentSnapshot()
 end
 
 local function QueuePersistentSave()
-    if persistQueued then
-        return
-    end
-
-    persistQueued = true
-    task.defer(function()
-        task.wait(0.05)
-        persistQueued = false
-        if SavePersistentState then
-            local ok, err = pcall(SavePersistentState)
-            if not ok then
-                warn("[EXECO] Persistent save failed:", err)
-            end
-        end
-    end)
+    -- v49: persistence is manual-only. Runtime changes are marked dirty but are
+    -- never written automatically. Press the configured Save Mock Data keybind
+    -- (K by default) to commit the current snapshot to disk.
+    PersistentStateDirty = true
 end
 
 PersistedSnapshot = ReadPersistentSnapshot()
@@ -2364,6 +2364,9 @@ SavePersistentState = function()
     end
 
     local okWrite = pcall(writefile, PERSISTENCE_FILE, encoded)
+    if okWrite then
+        PersistentStateDirty = false
+    end
     return okWrite
 end
 
@@ -3193,10 +3196,8 @@ local function RestorePersistentMockData()
                 task.wait(0.05)
             end
 
-            -- Save only AFTER all equipped state has been reconstructed.
-            if SavePersistentState then
-                pcall(SavePersistentState)
-            end
+            -- v49: restoring a saved snapshot must not silently rewrite it.
+            -- The snapshot changes only when the manual save keybind is pressed.
         end)
     end
 end
@@ -3398,6 +3399,8 @@ end))
 -- ================================
 -- UI: CASCADE
 -- ================================
+local PrivateControlsEnabled = false
+
 local function AddCascadeSlider(form, title, subtitle, value, minimum, maximum, onChanged)
     local row = form:Row({
         SearchIndex = title,
@@ -3408,11 +3411,28 @@ local function AddCascadeSlider(form, title, subtitle, value, minimum, maximum, 
         Subtitle = subtitle,
     })
 
+    local acceptedValue = value
+    local restoring = false
+
     return row:Right():Slider({
         Value = value,
         Minimum = minimum,
         Maximum = maximum,
         ValueChanged = function(self, newValue)
+            if restoring then
+                return
+            end
+
+            if not PrivateControlsEnabled then
+                -- Keep both the actual visual state and the slider presentation
+                -- unchanged while private overrides are locked.
+                restoring = true
+                self.Value = acceptedValue
+                restoring = false
+                return
+            end
+
+            acceptedValue = newValue
             onChanged(newValue)
         end,
     })
@@ -3456,15 +3476,61 @@ end
 
 -- Features
 do
-    local currencyForm = FeaturesTab:PageSection({
+    local featureForm = FeaturesTab:PageSection({
+        Title = "Rollback Engine",
+        Subtitle = "Enable or disable visual rollback interception.",
+    }):Form()
+
+    AddCascadeToggle(
+        featureForm,
+        "Enable Trait Rollback",
+        "Enable trait rollback.",
+        _G.AVTraitRollback,
+        function(value)
+            _G.AVTraitRollback = value
+            SafeLog("Trait Rollback", _G.AVTraitRollback and "Enabled" or "Disabled")
+        end
+    )
+
+    AddCascadeToggle(
+        featureForm,
+        "Enable Summon Rollback",
+        "Enable summon rollback.",
+        _G.AVSummonRollback,
+        function(value)
+            _G.AVSummonRollback = value
+            SafeLog("Summon Rollback", _G.AVSummonRollback and "Enabled" or "Disabled")
+        end
+    )
+end
+
+-- Persistence / private visual overrides
+do
+    local controlForm = PersistenceTab:PageSection({
+        Title = "Visual Overrides",
+        Subtitle = "Unlock private visual value controls for this session.",
+    }):Form()
+
+    AddCascadeToggle(
+        controlForm,
+        "Enable Visual Overrides",
+        "Allow the private sliders below to modify local visual values.",
+        PrivateControlsEnabled,
+        function(value)
+            PrivateControlsEnabled = value
+            SafeLog("Visual Overrides", value and "Unlocked" or "Locked")
+        end
+    )
+
+    local currencyForm = PersistenceTab:PageSection({
         Title = "Currency & Resources",
-        Subtitle = "Manage currency and resource values.",
+        Subtitle = "These sliders only work while Visual Overrides is enabled.",
     }):Form()
 
     AddCascadeSlider(
         currencyForm,
         "Gems",
-        "Set your gem amount.",
+        "Set your visual gem amount.",
         math.clamp(VisualState.Gems, 0, 1000000),
         0,
         1000000,
@@ -3480,7 +3546,7 @@ do
     AddCascadeSlider(
         currencyForm,
         "Gold",
-        "Set your gold amount.",
+        "Set your visual gold amount.",
         math.clamp(VisualState.Gold, 0, 10000000),
         0,
         10000000,
@@ -3494,7 +3560,7 @@ do
     AddCascadeSlider(
         currencyForm,
         "Trait Rerolls",
-        "Set your trait reroll amount.",
+        "Set your visual trait reroll amount.",
         math.clamp(VisualState.TraitRerolls, 0, 100000),
         0,
         100000,
@@ -3504,33 +3570,6 @@ do
             if not ok then warn("[EXECO] Reroll slider sync warning:", err) end
             SyncAllDisplays()
             QueuePersistentSave()
-        end
-    )
-
-    local featureForm = FeaturesTab:PageSection({
-        Title = "Feature Engine",
-        Subtitle = "Enable or disable EXECO features.",
-    }):Form()
-
-    AddCascadeToggle(
-        featureForm,
-        "Trait Rerolls",
-        "Enable trait rerolls.",
-        _G.AVTraitRollback,
-        function(value)
-            _G.AVTraitRollback = value
-            SafeLog("Trait Rerolls", _G.AVTraitRollback and "Enabled" or "Disabled")
-        end
-    )
-
-    AddCascadeToggle(
-        featureForm,
-        "Banner Summons",
-        "Enable banner summons.",
-        _G.AVSummonRollback,
-        function(value)
-            _G.AVSummonRollback = value
-            SafeLog("Banner Summons", _G.AVSummonRollback and "Enabled" or "Disabled")
         end
     )
 end
@@ -3572,14 +3611,9 @@ do
     AddCascadeButton(
         actionForm,
         "Rejoin Current Server",
-        "Save your current state and rejoin this server.",
+        "Rejoin using the last manually saved mock snapshot.",
         "Rejoin",
         function()
-            QueuePersistentSave()
-            if SavePersistentState then
-                pcall(SavePersistentState)
-            end
-
             local queued = QueueBlackSigilForTeleport()
             if not queued then
                 warn("[EXECO] Auto-execute could not be queued")
@@ -3589,6 +3623,27 @@ do
             TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
         end
     )
+end
+
+local function AddCascadeKeybind(form, title, subtitle, value, onPressed)
+    local row = form:Row({
+        SearchIndex = title,
+    })
+
+    row:Left():TitleStack({
+        Title = title,
+        Subtitle = subtitle,
+    })
+
+    return row:Right():KeybindField({
+        Value = value,
+        BindPressed = function(self, keyCode, inputComplete, gameProcessedEvent)
+            if not inputComplete or gameProcessedEvent then
+                return
+            end
+            onPressed(keyCode)
+        end,
+    })
 end
 
 -- Settings
@@ -3604,6 +3659,37 @@ do
         app.Theme == cascade.Themes.Dark,
         function(value)
             app.Theme = value and cascade.Themes.Dark or cascade.Themes.Light
+        end
+    )
+
+    local persistenceForm = SettingsTab:PageSection({
+        Title = "Persistence Save",
+        Subtitle = "Mock data is only written when this keybind is pressed.",
+    }):Form()
+
+    AddCascadeKeybind(
+        persistenceForm,
+        "Save Mock Data",
+        "Press the bound key to save the current mock snapshot. Default: K.",
+        Enum.KeyCode.K,
+        function()
+            if not SavePersistentState then
+                warn("[EXECO] Save Mock Data unavailable")
+                return
+            end
+
+            local ok, saved = pcall(SavePersistentState)
+            if ok and saved == true then
+                SafeLog("Persistence", "Mock data saved manually")
+                app:Notification({
+                    App = "EXECO",
+                    Title = "Mock data saved",
+                    Subtitle = "This snapshot will be restored on the next rejoin.",
+                    Duration = 3,
+                })
+            else
+                warn("[EXECO] Manual mock save failed:", saved)
+            end
         end
     )
 
@@ -3689,7 +3775,6 @@ end)
 RestorePersistentMockData()
 SyncVisualCurrenciesToNativeState()
 SyncAllDisplays()
-QueuePersistentSave()
 SafeLog("Loaded", string.format("Trait engine ready with %d live MockTraits; native banner summon engine ready", #TraitDatabase))
 SafeLog("Equip", "Visual mock equip/unequip enabled")
 SafeLog("Currency", "Native client affordability mirrors enabled")
@@ -3703,6 +3788,6 @@ if __BLACKSIGIL_TELEPORT_BOOT then
 end
 
 print(string.format(
-    "EXECO - Anime Expeditions (Cascade Dark Edition) initialized with %d live traits and banner summon support.",
+    "EXECO - Anime Expeditions - Private Version initialized with %d live traits and banner summon support.",
     #TraitDatabase
 ))
