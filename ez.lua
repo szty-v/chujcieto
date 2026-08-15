@@ -36,7 +36,7 @@ WaitForTeleportBootStability()
 -- CASCADE UI INITIALIZATION
 -- ================================
 local cascade
-if not __BLACKSIGIL_TELEPORT_BOOT then
+do
     local function importRelease(owner, repo, version, file)
         local tag = (version == "latest" and "latest/download" or "download/" .. version)
         local url = ("https://github.com/%s/%s/releases/%s/%s"):format(owner, repo, tag, file)
@@ -161,32 +161,33 @@ local SharedUtils = require(SharedFolder:WaitForChild("Utils"))
 -- ================================
 -- APP & WINDOW SETUP (CASCADE)
 -- ================================
-local app, Window, MainSection, FeaturesTab, SettingsTab
+local app = cascade.New({
+    WindowPill = true,
+    Theme = cascade.Themes.Dark,
+    Accent = cascade.Accents.Blue,
+})
 
-if not __BLACKSIGIL_TELEPORT_BOOT then
-    app = cascade.New({
-        WindowPill = true,
-        Theme = cascade.Themes.Dark,
-        Accent = cascade.Accents.Blue,
-    })
+local Window = app:Window({
+    Title = "EXECO",
+    Subtitle = "Anime Expeditions",
+})
 
-    Window = app:Window({
-        Title = "EXECO",
-        Subtitle = "Anime Expeditions",
-    })
+local MainSection = Window:Section({
+    Title = "EXECO",
+})
 
-    MainSection = Window:Section({
-        Title = "EXECO",
-    })
+local FeaturesTab = MainSection:Tab({
+    Selected = true,
+    Title = "Features",
+})
 
-    FeaturesTab = MainSection:Tab({
-        Selected = true,
-        Title = "Features",
-    })
+local SettingsTab = MainSection:Tab({
+    Title = "Settings",
+})
 
-    SettingsTab = MainSection:Tab({
-        Title = "Settings",
-    })
+-- Silent teleport boot: keep Cascade hidden while persistent mock state restores.
+if __BLACKSIGIL_TELEPORT_BOOT then
+    app.Enabled = false
 end
 
 -- ================================
@@ -222,10 +223,11 @@ local function SetSafeImage(imageLabel, imageId)
         else
             imageLabel.Image = FALLBACK_IMAGE
         end
-
-        -- Do NOT remove UIGradient children here. The native TraitIcon uses its
-        -- gradient to apply the trait's rarity colors. Destroying it made every
-        -- manually-set fallback icon appear colorless.
+        for _, child in ipairs(imageLabel:GetChildren()) do
+            if child:IsA("UIGradient") then
+                child:Destroy()
+            end
+        end
     end
 end
 
@@ -942,10 +944,6 @@ end
 
 local SyncMockTraitToHotbar
 local RefreshEquippedMockPresentation
--- Forward declaration: ApplyTraitToNativeLocalState is defined before the
--- actual helper body later in the file. Without this, Lua resolves the early
--- reference as a global and calls nil during every reroll.
-local IsTraitRerollBlockingHotbar
 
 local function ApplyTraitToNativeLocalState(unitID, rolledTrait)
     if type(unitID) ~= "string" or unitID == "" then
@@ -981,15 +979,11 @@ local function ApplyTraitToNativeLocalState(unitID, rolledTrait)
     newUnit.Trait = traitKey
     newUnit.BLACKSIGILMock = true
 
-    -- The native TraitReroll menu uses TraitRollAmount as the reroll-animation trigger.
-    -- Only advance it while the actual TraitReroll UI is visibly open so the game's
-    -- own Observer runs the stock reroll FX and Mythic TraitAnimation.
-    local nativeRollAmount = tonumber(currentUnit.TraitRollAmount) or 0
-    if IsTraitRerollBlockingHotbar() then
-        newUnit.TraitRollAmount = nativeRollAmount + 1
-    else
-        newUnit.TraitRollAmount = nativeRollAmount
-    end
+    -- Do not advance the native TraitRollAmount here. TraitReroll observes that
+    -- field specifically to invoke PlaySound/RerollTrait effects, and that native
+    -- callback reaches GetSettingValue from executor-created state and can error.
+    -- The trait itself is still fully reactive through UnitProcessor/TraitProcessor.
+    newUnit.TraitRollAmount = tonumber(currentUnit.TraitRollAmount) or 0
 
     table.insert(newHistory, 1, { traitKey, os.time() })
     while #newHistory > 50 do
@@ -1000,21 +994,7 @@ local function ApplyTraitToNativeLocalState(unitID, rolledTrait)
     newUnits[unitID] = newUnit
     MockUnitIDs[unitID] = true
 
-    -- IMPORTANT: TraitReroll's AssetDataProcessor is bound to the individual
-    -- Dependencies.UnitData[unitID] state when that leaf exists. Replacing the
-    -- whole UnitData container can update persistence/inventory without waking
-    -- the already-mounted TraitReroll UnitProcessor, which is why the reroll
-    -- counter/pity changed while the old trait name/icon stayed on screen.
-    --
-    -- Write the unit leaf first so the native Trait/Unit processors receive the
-    -- exact reactive change (Trait + TraitRollAmount) together.
-    local okWrite, writeErr = WriteNativeUnitRecord(unitID, newUnit)
-    if not okWrite then
-        -- Last-resort compatibility fallback for builds where UnitData is one
-        -- aggregate Fusion Value rather than a table of leaf Values.
-        okWrite, writeErr = SetNativeUnitDataState(newUnits)
-    end
-
+    local okWrite, writeErr = SetNativeUnitDataState(newUnits)
     if not okWrite then
         return false, "UnitData update failed: " .. tostring(writeErr)
     end
@@ -1320,50 +1300,128 @@ local function SyncTraitRerollCountDirect(previousAmount)
     end
 end
 
+-- ================================
+-- NATIVE MYTHIC TRAIT ANIMATION BRIDGE
+--
+-- The real TraitReroll menu only launches TraitAnimation after it observes
+-- TraitRollAmount increase. EXECO intentionally keeps TraitRollAmount frozen
+-- to avoid running the native reroll callback from executor-created state.
+-- Invoke only the native animation component directly instead.
+-- ================================
+local NativeTraitAnimationComponent = nil
+local NativeTraitAnimationLoadAttempted = false
+local ActiveNativeTraitAnimationScope = nil
+
+local function GetNativeTraitAnimationComponent()
+    if NativeTraitAnimationComponent then
+        return NativeTraitAnimationComponent
+    end
+
+    if NativeTraitAnimationLoadAttempted then
+        return nil, "native TraitAnimation previously failed to load"
+    end
+
+    NativeTraitAnimationLoadAttempted = true
+
+    local components = FusionPackage:FindFirstChild("Components")
+    local menu = components and components:FindFirstChild("Menu")
+    local reroll = menu and menu:FindFirstChild("TraitReroll")
+    local module = reroll and reroll:FindFirstChild("TraitAnimation")
+
+    if not module or not module:IsA("ModuleScript") then
+        return nil, "TraitAnimation module not found"
+    end
+
+    local ok, result = pcall(require, module)
+    if not ok or type(result) ~= "function" then
+        return nil, tostring(result)
+    end
+
+    NativeTraitAnimationComponent = result
+    return NativeTraitAnimationComponent
+end
+
+local function PlayNativeMythicTraitAnimation(rolledTrait)
+    if type(rolledTrait) ~= "table" or tostring(rolledTrait.Rarity) ~= "Mythic" then
+        return false
+    end
+
+    local component, componentErr = GetNativeTraitAnimationComponent()
+    if not component then
+        warn("[EXECO] Mythic TraitAnimation unavailable:", componentErr)
+        return false
+    end
+
+    -- Match native behavior: a new reroll replaces any still-running mythic animation.
+    if ActiveNativeTraitAnimationScope then
+        pcall(function() ActiveNativeTraitAnimationScope:doCleanup() end)
+        ActiveNativeTraitAnimationScope = nil
+    end
+
+    local traitKey = rolledTrait.InternalName or rolledTrait.Name
+    local traitImage = UIPaths.TraitImage()
+    local absoluteSize = Vector2.new(64, 64)
+    local absolutePosition = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize / 2 or Vector2.zero
+
+    if traitImage and traitImage:IsA("GuiObject") then
+        absoluteSize = traitImage.AbsoluteSize
+        absolutePosition = traitImage.AbsolutePosition
+    end
+
+    local ok, scopeOrErr = pcall(function()
+        local scope = Fusion.scoped(Fusion, NativeState, {
+            TraitAnimation = component
+        })
+
+        scope:TraitAnimation({
+            Trait = traitKey,
+            ImpactTime = 1.75,
+            Duration = 6,
+            AbsoluteSize = absoluteSize,
+            AbsolutePosition = absolutePosition
+        })
+
+        return scope
+    end)
+
+    if not ok then
+        warn("[EXECO] Mythic TraitAnimation failed:", scopeOrErr)
+        return false
+    end
+
+    ActiveNativeTraitAnimationScope = scopeOrErr
+
+    -- TraitAnimation has its own six-second cleanup. Clear our reference afterward.
+    task.delay(6.1, function()
+        if ActiveNativeTraitAnimationScope == scopeOrErr then
+            ActiveNativeTraitAnimationScope = nil
+        end
+    end)
+
+    SafeLog("Mythic Animation", tostring(traitKey))
+    return true
+end
+
 local function SettleTraitRerollVisuals(rolledTrait, previousAmount)
-    -- Native UnitProcessor/TraitProcessor should repaint the trait after the
-    -- leaf-state write above. Keep resource/pity values pinned while Fusion
-    -- settles, and use the direct renderer only as a delayed safety net if the
-    -- mounted menu still shows the previous trait.
-    local function applyCounters()
+    -- Let the game's native UnitProcessor -> TraitProcessor own the trait name,
+    -- icon, gradient, rarity color and description. We only keep the visual
+    -- reroll counter/pity synchronized while the menu settles.
+    local function apply()
         SyncTraitRerollCountDirect(previousAmount)
         SyncTraitPityDisplays()
     end
 
-    local function traitIsVisible()
-        local label = UIPaths.TraitName()
-        if not label or not label:IsA("TextLabel") then
-            return false
-        end
-
-        local wanted = string.lower(tostring(rolledTrait and rolledTrait.Name or ""))
-        local current = string.lower(tostring(label.Text or ""))
-        return wanted ~= "" and string.find(current, wanted, 1, true) ~= nil
-    end
-
-    applyCounters()
-
+    apply()
     task.spawn(function()
-        for _, delayTime in ipairs({0.03, 0.08, 0.16, 0.30, 0.55}) do
+        for _, delayTime in ipairs({0.03, 0.08, 0.16, 0.30}) do
             task.wait(delayTime)
-            applyCounters()
-        end
-
-        -- Do not stomp the game's normal reveal transition immediately.
-        -- Only repair the label/icon/info if the native reactive UI failed to
-        -- pick up the new mock trait after its normal settle window.
-        if not traitIsVisible() then
-            RenderTraitResult(rolledTrait)
-            task.wait(0.12)
-            if not traitIsVisible() then
-                RenderTraitResult(rolledTrait)
-            end
+            apply()
         end
     end)
 end
 
 local LastRerollIntercept = 0
-local REROLL_INTERCEPT_WINDOW = 0.40
+local REROLL_INTERCEPT_WINDOW = 0.12
 local RerollInProgress = false
 
 local function PerformVisualReroll(unitID, confirmed, options)
@@ -1422,22 +1480,20 @@ local function PerformVisualReroll(unitID, confirmed, options)
         SyncAllDisplays()
         SettleTraitRerollVisuals(rolledTrait, previousRerollAmount)
 
+        -- Native TraitReroll normally launches this only when TraitRollAmount rises.
+        -- Since EXECO deliberately freezes TraitRollAmount, launch just the native
+        -- Mythic animation component here without re-entering native reroll logic.
+        PlayNativeMythicTraitAnimation(rolledTrait)
+
         SafeLog("VISUAL REROLL", string.format("%s -> %s (%s, %.4f%%)%s", tostring(unitID), tostring(rolledTrait.Name), tostring(rolledTrait.Rarity), (rolledTrait.Chance or 0) * 100, confirmed and " [confirmed]" or ""))
         return true
     end)
 
+    RerollInProgress = false
     if not ok then
-        RerollInProgress = false
         warn("[EXECO] Visual trait reroll failed:", result)
         return false
     end
-
-    -- Hold the lock across the native TraitRollAmount observer's first reveal
-    -- frames so a rebuilt/button-repeat event cannot start another mock roll.
-    task.delay(0.35, function()
-        RerollInProgress = false
-    end)
-
     return result == true
 end
 
@@ -2197,7 +2253,7 @@ local function SettleUnitInventoryMockEquipVisual(equipped)
     end)
 end
 
-IsTraitRerollBlockingHotbar = function()
+local function IsTraitRerollBlockingHotbar()
     local gui = PlayerGui:FindFirstChild("TraitReroll")
     if not gui then return false end
 
@@ -3277,11 +3333,6 @@ local function IsExactBannerSummon(remote, method, args)
         and type(args[4]) == "number"
 end
 
--- The native reroll button can emit more than one matching request during a
--- single animated click/rebuild. Gate synchronously in __namecall BEFORE
--- task.defer so only one mock roll can ever be queued for a unit at a time.
-local TraitRerollRequestGate = {}
-
 local oldNamecall
 oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     local method = getnamecallmethod()
@@ -3332,17 +3383,7 @@ oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     end
 
     if _G.AVTraitRollback and IsExactTraitReroll(self, method, args) then
-        local unitID = args[3]
-        local now = os.clock()
-        local allowedAt = TraitRerollRequestGate[unitID] or 0
-
-        if now >= allowedAt and not RerollInProgress then
-            TraitRerollRequestGate[unitID] = now + 0.40
-            task.defer(PerformVisualReroll, unitID, args[4] == true)
-        end
-
-        -- Always swallow matching mock requests, including duplicates inside
-        -- the gate window. They must never reach the server or queue a 2nd roll.
+        task.defer(PerformVisualReroll, args[3], args[4] == true)
         return nil
     end
 
@@ -3414,7 +3455,6 @@ local function AddCascadeButton(form, title, subtitle, label, callback)
 end
 
 -- Features
-if not __BLACKSIGIL_TELEPORT_BOOT then
 do
     local currencyForm = FeaturesTab:PageSection({
         Title = "Currency & Resources",
@@ -3474,8 +3514,8 @@ do
 
     AddCascadeToggle(
         featureForm,
-        "Enable Trait Rollback",
-        "",
+        "Trait Rerolls",
+        "Enable trait rerolls.",
         _G.AVTraitRollback,
         function(value)
             _G.AVTraitRollback = value
@@ -3485,8 +3525,8 @@ do
 
     AddCascadeToggle(
         featureForm,
-        "Enable Summon Rollback",
-        "",
+        "Banner Summons",
+        "Enable banner summons.",
         _G.AVSummonRollback,
         function(value)
             _G.AVSummonRollback = value
@@ -3494,8 +3534,6 @@ do
         end
     )
 end
-
-end -- no Cascade UI on teleport/rejoin boot
 
 local function QueueBlackSigilForTeleport()
     local queueFn =
@@ -3526,7 +3564,6 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/szty-v/chujcieto/refs
     return true
 end
 
-if not __BLACKSIGIL_TELEPORT_BOOT then
 do
     local actionForm = FeaturesTab:PageSection({
         Title = "Session",
@@ -3553,10 +3590,8 @@ do
         end
     )
 end
-end
 
 -- Settings
-if not __BLACKSIGIL_TELEPORT_BOOT then
 do
     local appearanceForm = SettingsTab:PageSection({
         Title = "Appearance",
@@ -3572,7 +3607,25 @@ do
         end
     )
 
-end
+    local dataForm = SettingsTab:PageSection({
+        Title = "Data Management",
+    }):Form()
+
+    AddCascadeButton(
+        dataForm,
+        "Delete All Data",
+        "Clear saved units, equipped slots, pity, and session data.",
+        "Delete",
+        function()
+            DeleteAllMockData()
+            app:Notification({
+                App = "EXECO",
+                Title = "Data cleared",
+                Subtitle = "All saved data was deleted.",
+                Duration = 4,
+            })
+        end
+    )
 end
 
 if not __BLACKSIGIL_TELEPORT_BOOT then
@@ -3644,7 +3697,10 @@ SafeLog("Hotbar", "v15 native visuals; 1s rejoin boot + lazy safe native-module 
 SafeLog("Pity", "Summon pity 50/400/10000; trait pity Draconic 300 / Forsaken 500 / Primordial 750 / Unbound 1500")
 SafeLog("State", "Using leaf ItemData Values + PlayerData.HotbarData backing state")
 
--- Rejoin auto-execution is silent: Cascade is not imported or constructed on teleport boot.
+-- Rejoin auto-execution is silent: restore state, then leave the menu closed.
+if __BLACKSIGIL_TELEPORT_BOOT then
+    pcall(function() app.Enabled = false end)
+end
 
 print(string.format(
     "EXECO - Anime Expeditions (Cascade Dark Edition) initialized with %d live traits and banner summon support.",
