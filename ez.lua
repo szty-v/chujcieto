@@ -165,6 +165,18 @@ local Window = ModernV2:Window({
     NewElements = true,
 })
 
+-- Silent teleport boot: close the ModernV2 window immediately instead of
+-- allowing it to flash open while persistent mock state is restored.
+if __BLACKSIGIL_TELEPORT_BOOT then
+    pcall(function()
+        if Window.IsOpen and Window:IsOpen() then
+            Window:Close()
+        else
+            Window:Close()
+        end
+    end)
+end
+
 Window:CreateHomeTab({
     Name = "Dashboard",
     Icon = "lucide:layout-dashboard",
@@ -1779,6 +1791,7 @@ local function BuildMockUnitEntry(currentUnits, candidate)
     unit.Favorited = nil
     unit.Locked = nil
     unit.Equipped = nil
+    unit.Level = 1
 
     -- Fresh summons should not inherit another unit's trait/session history.
     unit.Trait = nil
@@ -2712,6 +2725,28 @@ local function MountMockNativeSlot(unitID, slot)
         end
     })
 
+    -- Native Unit.HotbarLayout derives its header from UnitStates.Level.
+    -- Executor-mounted native slots can lose that header during reactive rebuilds,
+    -- so pin the same "Lvl 1" presentation directly onto the mock slot host.
+    local levelLabel = Instance.new("TextLabel")
+    levelLabel.Name = "EXECO_Level"
+    levelLabel.BackgroundColor3 = Color3.fromRGB(18, 18, 20)
+    levelLabel.BackgroundTransparency = 0.05
+    levelLabel.BorderSizePixel = 0
+    levelLabel.Position = UDim2.fromOffset(4, 3)
+    levelLabel.Size = UDim2.fromOffset(48, 20)
+    levelLabel.ZIndex = 110
+    levelLabel.Font = Enum.Font.GothamBold
+    levelLabel.Text = "Lvl 1"
+    levelLabel.TextColor3 = Color3.new(1, 1, 1)
+    levelLabel.TextStrokeTransparency = 0.35
+    levelLabel.TextScaled = true
+    levelLabel.Parent = host
+
+    local levelCorner = Instance.new("UICorner")
+    levelCorner.CornerRadius = UDim.new(0, 6)
+    levelCorner.Parent = levelLabel
+
     local connections = {}
 
     -- If BottomHUD rebuilds the empty slot, remount into the new native slot.
@@ -3019,6 +3054,7 @@ local function RestorePersistentMockData()
         if type(unitID) == "string" and type(unitData) == "table" then
             local copy = CloneMap(unitData)
             copy.BLACKSIGILMock = true
+            copy.Level = 1
             newUnits[unitID] = copy
             MockUnitIDs[unitID] = true
             restored = restored + 1
