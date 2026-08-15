@@ -1,5 +1,5 @@
 --[[
-    EXECØ - Anime Expeditions (ModernV2 Interface Edition)
+    EXECO - Anime Expeditions (ModernV2 Interface Edition)
     Trait + Banner Feature Engine - Native Fusion Edition
 
     This build keeps the existing feature behavior while
@@ -8,7 +8,7 @@
 
 -- Rejoin auto-execution starts much earlier than a manual execute.
 -- On teleport boots, let Roblox finish constructing its own HUD/PlayerScripts
--- before EXECØ imports ModernV2/Fusion UI modules.
+-- before EXECO imports ModernV2/Fusion UI modules.
 local __BLACKSIGIL_ENV = (type(getgenv) == "function" and getgenv()) or _G
 local __BLACKSIGIL_TELEPORT_BOOT = __BLACKSIGIL_ENV.BLACKSIGIL_TELEPORT_BOOT == true
 __BLACKSIGIL_ENV.BLACKSIGIL_TELEPORT_BOOT = nil
@@ -25,7 +25,7 @@ local function WaitForTeleportBootStability()
     end
 
     -- Fast teleport boot: give the game one second after game.Loaded.
-    -- Native EXECØ hotbar modules are loaded lazily below so this short
+    -- Native EXECO hotbar modules are loaded lazily below so this short
     -- delay does not poison game UI modules that have not mounted yet.
     task.wait(1)
 end
@@ -43,7 +43,7 @@ do
     if ok then
         ModernV2 = result
     else
-        warn("[EXECØ] Failed to load ModernV2:", result)
+        warn("[EXECO] Failed to load ModernV2:", result)
         return
     end
 end
@@ -55,8 +55,8 @@ local HttpService = game:GetService("HttpService")
 local StarterPlayer = game:GetService("StarterPlayer")
 local LocalPlayer = Players.LocalPlayer
 
--- Set this to the raw URL hosting this EXECØ build for rejoin auto-execution.
-local EXECØ_RAW_URL = "https://raw.githubusercontent.com/szty-v/chujcieto/refs/heads/main/ez.lua"
+-- Set this to the raw URL hosting this EXECO build for rejoin auto-execution.
+local EXECO_RAW_URL = "https://raw.githubusercontent.com/szty-v/chujcieto/refs/heads/main/ez.lua"
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
 
@@ -80,7 +80,7 @@ local function IsModuleAlreadyLoaded(moduleScript)
     end
 
     -- Most executors expose getloadedmodules(). On teleport boot this lets us
-    -- distinguish modules Roblox has already loaded from modules EXECØ
+    -- distinguish modules Roblox has already loaded from modules EXECO
     -- would be first to load.
     if type(getloadedmodules) == "function" then
         local ok, modules = pcall(getloadedmodules)
@@ -155,7 +155,7 @@ local SharedUtils = require(SharedFolder:WaitForChild("Utils"))
 -- APP & WINDOW SETUP
 -- ================================
 local Window = ModernV2:Window({
-    Title = "EXECØ",
+    Title = "EXECO",
     AlwaysShowTab = false,
     Content = "Anime Expeditions",
     Image = "lucide:shield",
@@ -168,13 +168,13 @@ local Window = ModernV2:Window({
 Window:CreateHomeTab({
     Name = "Dashboard",
     Icon = "lucide:layout-dashboard",
-    Content = "EXECØ",
+    Content = "EXECO",
     Segments = {
         Details = {
             Text = "Features",
             Icon = "lucide:grid-2x2",
             Description = {
-                Title = "EXECØ",
+                Title = "EXECO",
                 Date = "Current Session",
                 Content = "Banner summons, trait rerolls, inventory, equip and hotbar integration."
             },
@@ -212,7 +212,7 @@ local SettingsTab = Window:AddTab({
 -- SAFE LOGGING
 -- ================================
 local function SafeLog(title, message)
-    print(string.format("[EXECØ] %s - %s", tostring(title), tostring(message)))
+    print(string.format("[EXECO] %s - %s", tostring(title), tostring(message)))
 end
 
 -- ================================
@@ -275,7 +275,7 @@ local UIPaths = {
     UnboundTraitPityText = function() return SafeGet(PlayerGui, "TraitReroll", "Frame", "Folder", "Overlay", "ScrollingFrame", 17, "Frame", 4, "Frame", "Frame", "Frame", "Frame", 4) end,
     UnboundTraitPityBar = function() return SafeGet(PlayerGui, "TraitReroll", "Frame", "Folder", "Overlay", "ScrollingFrame", 17, "Frame", 4, "Frame", "Frame", "Frame", 2, "CanvasGroup", "Frame") end,
 
-    -- Mock summon pity displays (display-only; no EXECØ sliders).
+    -- Mock summon pity displays (display-only; no EXECO sliders).
     LegendaryPityText = function() return SafeGet(PlayerGui, "Summon", "Frame", "Frame", "Frame", "Frame", 4, "Frame", 3, 5, 3, "Frame", "Frame", "Frame", 4) end,
     LegendaryPityBar = function() return SafeGet(PlayerGui, "Summon", "Frame", "Frame", "Frame", "Frame", 4, "Frame", 3, 5, 3, "Frame", "Frame", 2, "CanvasGroup", "Frame") end,
     MythicPityText = function() return SafeGet(PlayerGui, "Summon", "Frame", "Frame", "Frame", "Frame", 4, "Frame", 3, 5, "Frame", "Frame", "Frame", "Frame", 4) end,
@@ -317,7 +317,7 @@ local function SyncUnitInventoryCount()
 end
 
 -- ================================
-local PERSISTENCE_FILE = "EXECØ_mock_state_v15.json"
+local PERSISTENCE_FILE = "EXECO_mock_state_v15.json"
 local PersistedSnapshot = nil
 local SavePersistentState = nil
 local persistQueued = false
@@ -357,7 +357,7 @@ local function QueuePersistentSave()
         if SavePersistentState then
             local ok, err = pcall(SavePersistentState)
             if not ok then
-                warn("[EXECØ] Persistent save failed:", err)
+                warn("[EXECO] Persistent save failed:", err)
             end
         end
     end)
@@ -489,13 +489,13 @@ end
 local function RefreshTraitDatabase(showNotification)
     local module = GetMockTraitsModule()
     if not module then
-        warn("[EXECØ] MockTraits module was not found.")
+        warn("[EXECO] MockTraits module was not found.")
         return false, "MockTraits module not found"
     end
 
     local ok, result = pcall(require, module)
     if not ok or type(result) ~= "table" then
-        warn("[EXECØ] Failed to require MockTraits:", result)
+        warn("[EXECO] Failed to require MockTraits:", result)
         return false, tostring(result)
     end
 
@@ -522,7 +522,7 @@ local function RefreshTraitDatabase(showNotification)
     end)
 
     if #newDatabase == 0 then
-        warn("[EXECØ] MockTraits returned no usable traits.")
+        warn("[EXECO] MockTraits returned no usable traits.")
         return false, "No usable traits"
     end
 
@@ -531,7 +531,7 @@ local function RefreshTraitDatabase(showNotification)
     TraitByName = newByName
 
     print(string.format(
-        "[EXECØ] Loaded %d traits from FusionPackage.Dependencies.Mock.MockTraits",
+        "[EXECO] Loaded %d traits from FusionPackage.Dependencies.Mock.MockTraits",
         #TraitDatabase
     ))
 
@@ -579,7 +579,7 @@ end
 do
     local ok, err = RefreshTraitDatabase(false)
     if not ok then
-        warn("[EXECØ] Trait engine started without live traits:", err)
+        warn("[EXECO] Trait engine started without live traits:", err)
     end
 end
 
@@ -715,7 +715,7 @@ local JsonSafeCopy
 
 -- ================================
 -- LOCAL CLIENT CURRENCY MIRROR
--- Keeps native BuyButton validation in sync with EXECØ's visual sliders.
+-- Keeps native BuyButton validation in sync with EXECO's visual sliders.
 -- No server currency is changed.
 -- ================================
 local function GetTraitRerollItemName()
@@ -830,13 +830,13 @@ end
 local function SyncVisualCurrenciesToNativeState()
     local gemOk, gemErr = SetLocalItemAmount("Gem", VisualState.Gems)
     if not gemOk then
-        warn("[EXECØ] Gem mirror warning:", gemErr)
+        warn("[EXECO] Gem mirror warning:", gemErr)
     end
 
     local rerollName = GetTraitRerollItemName()
     local rerollOk, rerollErr = SetLocalItemAmount(rerollName, VisualState.TraitRerolls)
     if not rerollOk then
-        warn("[EXECØ] Trait reroll mirror warning:", rerollErr)
+        warn("[EXECO] Trait reroll mirror warning:", rerollErr)
     end
 end
 
@@ -1054,7 +1054,7 @@ local function AddTraitToHistory(traitData)
     for _, child in ipairs(scroll:GetChildren()) do
         if child:IsA("Frame")
             and child:FindFirstChild("Frame")
-            and child:GetAttribute("EXECØ_HistoryClone") ~= true then
+            and child:GetAttribute("EXECO_HistoryClone") ~= true then
             template = child
             break
         end
@@ -1065,8 +1065,8 @@ local function AddTraitToHistory(traitData)
     end
 
     local clone = template:Clone()
-    clone:SetAttribute("EXECØ_HistoryClone", true)
-    clone.Name = "EXECØ_" .. tostring(VisualState.RollsCount)
+    clone:SetAttribute("EXECO_HistoryClone", true)
+    clone.Name = "EXECO_" .. tostring(VisualState.RollsCount)
 
     -- Newest local roll first when the UI uses LayoutOrder.
     pcall(function()
@@ -1112,10 +1112,10 @@ local function AddTraitToHistory(traitData)
 
     clone.Parent = scroll
 
-    -- Keep at most 50 EXECØ history rows in the visible history UI too.
+    -- Keep at most 50 EXECO history rows in the visible history UI too.
     local clones = {}
     for _, child in ipairs(scroll:GetChildren()) do
-        if child:GetAttribute("EXECØ_HistoryClone") == true then
+        if child:GetAttribute("EXECO_HistoryClone") == true then
             table.insert(clones, child)
         end
     end
@@ -1366,7 +1366,7 @@ local function PerformVisualReroll(unitID, confirmed, options)
                 VisualState.TraitRerolls
             )
             if not rerollOk then
-                warn("[EXECØ] Reroll consume sync warning:", rerollErr)
+                warn("[EXECO] Reroll consume sync warning:", rerollErr)
             end
         end
         VisualState.LastTrait = rolledTrait
@@ -1379,7 +1379,7 @@ local function PerformVisualReroll(unitID, confirmed, options)
                 task.defer(RefreshEquippedMockPresentation, unitID)
             end
         else
-            warn("[EXECØ] Native local trait state failed:", nativeErr)
+            warn("[EXECO] Native local trait state failed:", nativeErr)
         end
 
         SyncAllDisplays()
@@ -1391,7 +1391,7 @@ local function PerformVisualReroll(unitID, confirmed, options)
 
     RerollInProgress = false
     if not ok then
-        warn("[EXECØ] Visual trait reroll failed:", result)
+        warn("[EXECO] Visual trait reroll failed:", result)
         return false
     end
     return result == true
@@ -1676,24 +1676,24 @@ local function LogHardcodedBannerChances(bannerID, candidates)
 
     LoggedBannerChanceTables[bannerID] = true
 
-    print("[EXECØ] Hardcoded rarity chances for", bannerID)
+    print("[EXECO] Hardcoded rarity chances for", bannerID)
 
     for _, rarity in ipairs(BannerRarityOrder) do
         print(string.format(
-            "[EXECØ]   %-10s %.4f%%",
+            "[EXECO]   %-10s %.4f%%",
             rarity,
             BannerRarityChances[rarity]
         ))
     end
 
-    print("[EXECØ] Effective unit chances for current pool:")
+    print("[EXECO] Effective unit chances for current pool:")
 
     for _, candidate in ipairs(candidates) do
         local rarity = ResolveCandidateRarity(candidate) or "Unknown"
         local effectiveChance = GetEffectiveCandidateChance(candidates, candidate)
 
         print(string.format(
-            "[EXECØ]   %s | %s | %.6f%%",
+            "[EXECO]   %s | %s | %.6f%%",
             tostring(candidate.Asset),
             tostring(rarity),
             effectiveChance
@@ -1714,7 +1714,7 @@ local function RollBannerCandidate(candidates, forcedRarity)
 
     if #rarityCandidates == 0 then
         warn(
-            "[EXECØ] Banner pool has no",
+            "[EXECO] Banner pool has no",
             rolledRarity,
             "candidate; falling back to live pool"
         )
@@ -1807,7 +1807,7 @@ local function DeductLocalBannerCurrency(root, bannerSnapshot, amount)
 
         local ok, err = SetLocalItemAmount("Gem", VisualState.Gems)
         if not ok then
-            warn("[EXECØ] Visual Gem spend warning:", err)
+            warn("[EXECO] Visual Gem spend warning:", err)
         end
     end
 
@@ -1871,7 +1871,7 @@ local function ApplyLocalSummonState(bannerID, bannerSnapshot, candidates, amoun
         return false, "UnitData sync failed: " .. tostring(unitSyncErr)
     end
 
-    -- Currency/pity are EXECØ visual state and do not require a PlayerData
+    -- Currency/pity are EXECO visual state and do not require a PlayerData
     -- root replacement.
     DeductLocalBannerCurrency({}, bannerSnapshot, #results)
 
@@ -1939,7 +1939,7 @@ local function ShowNativeSummonResults(results)
                     task.spawn(function()
                         local okAnim, animErr = pcall(object.Animation, object)
                         if not okAnim then
-                            warn("[EXECØ] Native summon cutscene failed:", animErr)
+                            warn("[EXECO] Native summon cutscene failed:", animErr)
                             pcall(function()
                                 SharedUtils:DisplaySummonResult(results, true, "SummonAnimation")
                             end)
@@ -1950,7 +1950,7 @@ local function ShowNativeSummonResults(results)
                     task.spawn(function()
                         local okStart, startErr = pcall(object.Start, object)
                         if not okStart then
-                            warn("[EXECØ] Native summon cutscene start failed:", startErr)
+                            warn("[EXECO] Native summon cutscene start failed:", startErr)
                             pcall(function()
                                 SharedUtils:DisplaySummonResult(results, true, "SummonAnimation")
                             end)
@@ -1967,7 +1967,7 @@ local function ShowNativeSummonResults(results)
     end)
 
     if not okDisplay then
-        warn("[EXECØ] Native summon result UI failed:", displayErr)
+        warn("[EXECO] Native summon result UI failed:", displayErr)
         return false
     end
 
@@ -1986,7 +1986,7 @@ local function PerformVisualSummon(bannerID, amount)
 
         local bannerSnapshot, bannerErr = GetBannerSnapshot(bannerID)
         if not bannerSnapshot then
-            warn("[EXECØ] Banner snapshot failed:", bannerErr)
+            warn("[EXECO] Banner snapshot failed:", bannerErr)
             return false
         end
 
@@ -1994,7 +1994,7 @@ local function PerformVisualSummon(bannerID, amount)
         local candidates = FlattenBannerPool(currentPool)
 
         if #candidates == 0 then
-            warn("[EXECØ] No summon candidates found in CurrentPool for", bannerID)
+            warn("[EXECO] No summon candidates found in CurrentPool for", bannerID)
             return false
         end
 
@@ -2008,7 +2008,7 @@ local function PerformVisualSummon(bannerID, amount)
         )
 
         if not applied then
-            warn("[EXECØ] Local summon state failed:", resultsOrErr)
+            warn("[EXECO] Local summon state failed:", resultsOrErr)
             return false
         end
 
@@ -2051,7 +2051,7 @@ local function PerformVisualSummon(bannerID, amount)
     SummonInProgress = false
 
     if not ok then
-        warn("[EXECØ] Visual summon failed:", result)
+        warn("[EXECO] Visual summon failed:", result)
         return false
     end
 
@@ -2390,7 +2390,7 @@ local function GetMockOverlayRoot()
         screenGui = parent
     else
         screenGui = Instance.new("ScreenGui")
-        screenGui.Name = "EXECØ_MockHotbar"
+        screenGui.Name = "EXECO_MockHotbar"
         screenGui.IgnoreGuiInset = true
         screenGui.ResetOnSpawn = false
         screenGui.DisplayOrder = 100
@@ -2398,7 +2398,7 @@ local function GetMockOverlayRoot()
     end
 
     local root = Instance.new("Frame")
-    root.Name = "EXECØ_MockHotbarOverlay"
+    root.Name = "EXECO_MockHotbarOverlay"
     root.BackgroundTransparency = 1
     root.BorderSizePixel = 0
     root.Size = UDim2.fromScale(1, 1)
@@ -2520,7 +2520,7 @@ end
 local function CreateMockSlotHost(anchor, slot)
     if anchor and anchor.Parent then
         local host = Instance.new("Frame")
-        host.Name = "EXECØ_MockNativeSlot_" .. tostring(slot)
+        host.Name = "EXECO_MockNativeSlot_" .. tostring(slot)
         host.BackgroundTransparency = 1
         host.BorderSizePixel = 0
         host.Size = UDim2.fromScale(1, 1)
@@ -2536,7 +2536,7 @@ local function CreateMockSlotHost(anchor, slot)
     local root = GetMockOverlayRoot()
     local pos, size = GetFallbackSlotRect(slot)
     local host = Instance.new("Frame")
-    host.Name = "EXECØ_MockNativeSlotFallback_" .. tostring(slot)
+    host.Name = "EXECO_MockNativeSlotFallback_" .. tostring(slot)
     host.BackgroundTransparency = 1
     host.BorderSizePixel = 0
     host.Size = UDim2.fromOffset(size.X, size.Y)
@@ -2716,7 +2716,7 @@ local function MountMockNativeSlot(unitID, slot)
                         task.wait()
                         local ok, mounted, err = pcall(MountMockNativeSlot, unitID, slot)
                         if not ok then
-                            warn("[EXECØ] Native hotbar remount failed:", mounted)
+                            warn("[EXECO] Native hotbar remount failed:", mounted)
                         elseif mounted ~= true and err ~= "trait reroll is hiding the hotbar" then
                             QueueDeferredNativeHotbarMount(unitID, slot)
                         end
@@ -2786,9 +2786,9 @@ QueueDeferredNativeHotbarMount = function(unitID, slot)
                     )
                     return
                 elseif not ok then
-                    warn("[EXECØ] Deferred hotbar mount failed:", mounted)
+                    warn("[EXECO] Deferred hotbar mount failed:", mounted)
                 elseif mountErr and mountErr ~= "native hotbar UI modules are not primed yet" then
-                    warn("[EXECØ] Deferred hotbar mount warning:", mountErr)
+                    warn("[EXECO] Deferred hotbar mount warning:", mountErr)
                 end
             end
 
@@ -2796,7 +2796,7 @@ QueueDeferredNativeHotbarMount = function(unitID, slot)
         end
 
         DeferredHotbarMounts[unitID] = nil
-        warn("[EXECØ] Native hotbar renderer stayed unprimed; equip state/follower kept:", unitID)
+        warn("[EXECO] Native hotbar renderer stayed unprimed; equip state/follower kept:", unitID)
     end)
 end
 
@@ -2875,7 +2875,7 @@ RefreshEquippedMockPresentation = function(unitID)
             if MockEquippedSlots[unitID] == slot then
                 local okMount, mounted, mountErr = pcall(MountMockNativeSlot, unitID, slot)
                 if not okMount then
-                    warn("[EXECØ] Native hotbar refresh remount failed:", mounted)
+                    warn("[EXECO] Native hotbar refresh remount failed:", mounted)
                 elseif mounted ~= true then
                     QueueDeferredNativeHotbarMount(unitID, slot)
                 end
@@ -2884,7 +2884,7 @@ RefreshEquippedMockPresentation = function(unitID)
     else
         local ok, err = pcall(MountMockNativeSlot, unitID, slot)
         if not ok then
-            warn("[EXECØ] Native hotbar refresh mount failed:", err)
+            warn("[EXECO] Native hotbar refresh mount failed:", err)
         end
     end
 
@@ -2903,7 +2903,7 @@ end
 
 local function VisualEquipMockUnit(unitID, requestedSlot)
     if not IsMockUnitID(unitID) then
-        return false, "not a EXECØ mock unit"
+        return false, "not a EXECO mock unit"
     end
 
     local slot = MockEquippedSlots[unitID]
@@ -2924,7 +2924,7 @@ local function VisualEquipMockUnit(unitID, requestedSlot)
 
     local okSlot, mountedSlot, slotErr = pcall(MountMockNativeSlot, unitID, slot)
     if not okSlot then
-        warn("[EXECØ] Native mock slot mount failed:", mountedSlot)
+        warn("[EXECO] Native mock slot mount failed:", mountedSlot)
         QueueDeferredNativeHotbarMount(unitID, slot)
     elseif mountedSlot ~= true then
         -- Rejoin boot commonly lands here for a moment. Keep equip/follower
@@ -2936,7 +2936,7 @@ local function VisualEquipMockUnit(unitID, requestedSlot)
     RemoveMockFollower(unitID)
     local okFollower, followerErr = AddMockFollower(unitID, slot)
     if not okFollower then
-        warn("[EXECØ] Mock follower add failed:", followerErr)
+        warn("[EXECO] Mock follower add failed:", followerErr)
     end
 
     SettleUnitInventoryMockEquipVisual(true)
@@ -2947,7 +2947,7 @@ end
 
 VisualUnequipMockUnit = function(unitID)
     if not IsMockUnitID(unitID) then
-        return false, "not a EXECØ mock unit"
+        return false, "not a EXECO mock unit"
     end
 
     local slot = MockEquippedSlots[unitID]
@@ -2963,7 +2963,7 @@ VisualUnequipMockUnit = function(unitID)
 
     local okFlag, flagErr = SetMockInventoryEquipped(unitID, false)
     if not okFlag then
-        warn("[EXECØ] Inventory unequip flag warning:", flagErr)
+        warn("[EXECO] Inventory unequip flag warning:", flagErr)
     end
 
     SettleUnitInventoryMockEquipVisual(false)
@@ -3018,7 +3018,7 @@ local function RestorePersistentMockData()
         -- trees such as PlayerOverhead.
         local okUnitRestore, unitRestoreErr = SetNativeUnitDataState(newUnits)
         if not okUnitRestore then
-            warn("[EXECØ] Persistent UnitData restore warning:", unitRestoreErr)
+            warn("[EXECO] Persistent UnitData restore warning:", unitRestoreErr)
         end
         SafeLog("Persistence", string.format("restored %d mock units", restored))
     end
@@ -3065,7 +3065,7 @@ local function RestorePersistentMockData()
                         MockSlotUnits[entry.Slot] = nil
                     end
                     warn(
-                        "[EXECØ] Rejoin equip restore failed:",
+                        "[EXECO] Rejoin equip restore failed:",
                         entry.UnitID,
                         equipResult
                     )
@@ -3075,7 +3075,7 @@ local function RestorePersistentMockData()
                         MockSlotUnits[entry.Slot] = nil
                     end
                     warn(
-                        "[EXECØ] Rejoin equip restore skipped:",
+                        "[EXECO] Rejoin equip restore skipped:",
                         entry.UnitID,
                         equipErr
                     )
@@ -3105,7 +3105,7 @@ local function ClearMockHistoryGui()
     local scroll = UIPaths.HistoryScroll()
     if scroll then
         for _, child in ipairs(scroll:GetChildren()) do
-            if child:GetAttribute("EXECØ_HistoryClone") == true then
+            if child:GetAttribute("EXECO_HistoryClone") == true then
                 pcall(function() child:Destroy() end)
             end
         end
@@ -3122,7 +3122,7 @@ local function DeleteAllMockData()
         pcall(VisualUnequipMockUnit, unitID)
     end
 
-    -- Remove every EXECØ-created unit from both local UnitData states.
+    -- Remove every EXECO-created unit from both local UnitData states.
     local okRoot, currentRoot = pcall(Fusion.peek, PlayerDataState)
     if okRoot and type(currentRoot) == "table" then
         local newUnits = CloneMap(currentRoot.UnitData)
@@ -3172,7 +3172,7 @@ local function DeleteAllMockData()
         end)
     end
     QueuePersistentSave()
-    SafeLog("Reset", "all EXECØ mock data deleted")
+    SafeLog("Reset", "all EXECO mock data deleted")
 end
 
 -- ================================
@@ -3258,7 +3258,7 @@ oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
             end
 
             if not ok then
-                warn("[EXECØ] Mock equip toggle failed:", err)
+                warn("[EXECO] Mock equip toggle failed:", err)
             end
 
             -- Mock unit IDs are never sent to the server.
@@ -3274,7 +3274,7 @@ oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
             local ok, err = VisualUnequipMockUnit(unitID)
 
             if not ok then
-                warn("[EXECØ] Visual unequip failed:", err)
+                warn("[EXECO] Visual unequip failed:", err)
             end
 
             -- Mock unit IDs are never sent to the server.
@@ -3308,11 +3308,11 @@ currencySection:AddSlider({
     Default = math.clamp(VisualState.Gems, 0, 1000000),
     Min = 0,
     Max = 1000000,
-    Flag = "EXECØGems",
+    Flag = "EXECOGems",
     Callback = function(value)
         VisualState.Gems = math.floor(tonumber(value) or 0)
         local ok, err = SetLocalItemAmount("Gem", VisualState.Gems)
-        if not ok then warn("[EXECØ] Gem slider sync warning:", err) end
+        if not ok then warn("[EXECO] Gem slider sync warning:", err) end
         SyncAllDisplays()
         QueuePersistentSave()
     end,
@@ -3323,7 +3323,7 @@ currencySection:AddSlider({
     Default = math.clamp(VisualState.Gold, 0, 10000000),
     Min = 0,
     Max = 10000000,
-    Flag = "EXECØGold",
+    Flag = "EXECOGold",
     Callback = function(value)
         VisualState.Gold = math.floor(tonumber(value) or 0)
         SyncAllDisplays()
@@ -3336,11 +3336,11 @@ currencySection:AddSlider({
     Default = math.clamp(VisualState.TraitRerolls, 0, 100000),
     Min = 0,
     Max = 100000,
-    Flag = "EXECØTraitRerolls",
+    Flag = "EXECOTraitRerolls",
     Callback = function(value)
         VisualState.TraitRerolls = math.floor(tonumber(value) or 0)
         local ok, err = SetLocalItemAmount(GetTraitRerollItemName(), VisualState.TraitRerolls)
-        if not ok then warn("[EXECØ] Reroll slider sync warning:", err) end
+        if not ok then warn("[EXECO] Reroll slider sync warning:", err) end
         SyncAllDisplays()
         QueuePersistentSave()
     end,
@@ -3355,7 +3355,7 @@ featureSection:AddToggle({
     Name = "Trait Rerolls",
     Tags = { { Title = "ROLLBACK", Color = "#4e7ffc" } },
     Default = _G.AVTraitRollback,
-    Flag = "EXECØTraitEnabled",
+    Flag = "EXECOTraitEnabled",
     Callback = function(value)
         _G.AVTraitRollback = value == true
         SafeLog("Trait Rerolls", _G.AVTraitRollback and "Enabled" or "Disabled")
@@ -3366,7 +3366,7 @@ featureSection:AddToggle({
     Name = "Banner Summons",
     Tags = { { Title = "ROLLBACK", Color = "#4e7ffc" } },
     Default = _G.AVSummonRollback,
-    Flag = "EXECØBannerEnabled",
+    Flag = "EXECOBannerEnabled",
     Callback = function(value)
         _G.AVSummonRollback = value == true
         SafeLog("Banner Summons", _G.AVSummonRollback and "Enabled" or "Disabled")
@@ -3380,7 +3380,7 @@ local function QueueBlackSigilForTeleport()
         or (fluxus and fluxus.queue_on_teleport)
 
     if type(queueFn) ~= "function" then
-        warn("[EXECØ] Executor does not expose queue_on_teleport")
+        warn("[EXECO] Executor does not expose queue_on_teleport")
         return false
     end
 
@@ -3395,7 +3395,7 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/szty-v/chujcieto/refs
     end)
 
     if not ok then
-        warn("[EXECØ] queue_on_teleport failed:", err)
+        warn("[EXECO] queue_on_teleport failed:", err)
         return false
     end
 
@@ -3413,7 +3413,7 @@ featureSection:AddButton({
 
         local queued = QueueBlackSigilForTeleport()
         if not queued then
-            warn("[EXECØ] Auto-execute could not be queued")
+            warn("[EXECO] Auto-execute could not be queued")
         end
 
         task.wait(0.15)
@@ -3435,7 +3435,7 @@ dataSection:AddButton({
         DeleteAllMockData()
         pcall(function()
             Window:Notify({
-                Title = "EXECØ",
+                Title = "EXECO",
                 Content = "Mock data cleared.",
                 Duration = 4
             })
@@ -3445,7 +3445,7 @@ dataSection:AddButton({
 
 pcall(function()
     Window:Notify({
-        Title = "EXECØ",
+        Title = "EXECO",
         Content = "Features loaded successfully.",
         Duration = 4
     })
@@ -3512,6 +3512,6 @@ SafeLog("Pity", "Summon pity 50/400/10000; trait pity Draconic 300 / Forsaken 50
 SafeLog("State", "Using leaf ItemData Values + PlayerData.HotbarData backing state")
 
 print(string.format(
-    "EXECØ - Anime Expeditions (ModernV2 Edition) initialized with %d live traits and banner summon support.",
+    "EXECO - Anime Expeditions (ModernV2 Edition) initialized with %d live traits and banner summon support.",
     #TraitDatabase
 ))
