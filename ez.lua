@@ -39,7 +39,6 @@ local __uiEnv = (type(getgenv) == "function" and getgenv()) or _G
 __uiEnv.InterfaceName = "BLACKSIGIL"
 
 local Starlight
-local NebulaIcons
 
 do
     local ok, result = pcall(function()
@@ -53,17 +52,6 @@ do
     end
 end
 
-do
-    local ok, result = pcall(function()
-        return loadstring(game:HttpGet("https://raw.nebulasoftworks.xyz/nebula-icon-library-loader"))()
-    end)
-    if ok then
-        NebulaIcons = result
-    else
-        warn("[BLACKSIGIL] Failed to load Nebula Icons:", result)
-        return
-    end
-end
 
 local function StarlightIcon(name, source)
     local ok, icon = pcall(function()
@@ -209,7 +197,6 @@ local SharedUtils = require(SharedFolder:WaitForChild("Utils"))
 local Window = Starlight:CreateWindow({
     Name = "BLACKSIGIL",
     Subtitle = "Anime Vanguards",
-    Icon = StarlightIcon("shield", "Material"),
     LoadingEnabled = true,
     LoadingSettings = {
         Title = "BLACKSIGIL",
@@ -228,13 +215,11 @@ local SettingsSection = Window:CreateTabSection("Configuration")
 
 local FeaturesTab = MainSection:CreateTab({
     Name = "Features",
-    Icon = StarlightIcon("auto_awesome", "Material"),
     Columns = 2,
 }, "FeaturesTab")
 
 local SettingsTab = SettingsSection:CreateTab({
     Name = "Settings",
-    Icon = StarlightIcon("settings", "Material"),
     Columns = 2,
 }, "SettingsTab")
 
@@ -3292,20 +3277,17 @@ end))
 -- ================================
 local currencyGroup = FeaturesTab:CreateGroupbox({
     Name = "Currency & Resources",
-    Icon = StarlightIcon("paid", "Material"),
     Column = 1,
 }, "CurrencyGroup")
 
 currencyGroup:CreateParagraph({
     Name = "Resource Controls",
     Content = "Manage the values BLACKSIGIL uses for Gems, Gold, and Trait Rerolls. Changes are applied immediately and saved with your BLACKSIGIL data.",
-    Icon = StarlightIcon("account_balance_wallet", "Material"),
 }, "CurrencyInfo")
 
 currencyGroup:CreateSlider({
     Name = "Gems",
     Tooltip = "Set the Gems amount used by BLACKSIGIL features and the game HUD.",
-    Icon = StarlightIcon("diamond", "Material"),
     Range = {0, 1000000},
     Increment = 1,
     CurrentValue = VisualState.Gems,
@@ -3321,7 +3303,6 @@ currencyGroup:CreateSlider({
 currencyGroup:CreateSlider({
     Name = "Gold",
     Tooltip = "Set the Gold amount displayed and maintained by BLACKSIGIL.",
-    Icon = StarlightIcon("monetization_on", "Material"),
     Range = {0, 10000000},
     Increment = 1,
     CurrentValue = VisualState.Gold,
@@ -3335,7 +3316,6 @@ currencyGroup:CreateSlider({
 currencyGroup:CreateSlider({
     Name = "Trait Rerolls",
     Tooltip = "Set the Trait Reroll balance used when rerolling mock units.",
-    Icon = StarlightIcon("casino", "Material"),
     Range = {0, 100000},
     Increment = 1,
     CurrentValue = VisualState.TraitRerolls,
@@ -3350,20 +3330,17 @@ currencyGroup:CreateSlider({
 
 local featureGroup = FeaturesTab:CreateGroupbox({
     Name = "Core Features",
-    Icon = StarlightIcon("tune", "Material"),
     Column = 2,
 }, "CoreFeatureGroup")
 
 featureGroup:CreateParagraph({
     Name = "Feature Routing",
     Content = "Enable the BLACKSIGIL handlers for trait rerolls and banner summons. Mock-unit inventory, hotbar, trait history, pity, equipped state, and rejoin persistence are handled automatically.",
-    Icon = StarlightIcon("hub", "Material"),
 }, "FeatureInfo")
 
 featureGroup:CreateToggle({
     Name = "Trait Rerolls",
     Tooltip = "Enable BLACKSIGIL trait rerolls for mock units, including resource usage, history, pity, inventory updates, and equipped-unit refreshes.",
-    Icon = StarlightIcon("autorenew", "Material"),
     CurrentValue = _G.AVTraitRollback,
     Style = 2,
     Callback = function(value)
@@ -3375,7 +3352,6 @@ featureGroup:CreateToggle({
 featureGroup:CreateToggle({
     Name = "Banner Summons",
     Tooltip = "Enable BLACKSIGIL banner summons, rarity rolls, pity progression, inventory additions, and saved summon results.",
-    Icon = StarlightIcon("stars", "Material"),
     CurrentValue = _G.AVSummonRollback,
     Style = 2,
     Callback = function(value)
@@ -3416,7 +3392,6 @@ end
 featureGroup:CreateButton({
     Name = "Rejoin Current Server",
     Tooltip = "Save BLACKSIGIL state, queue the loader, and reconnect to this server.",
-    Icon = StarlightIcon("restart_alt", "Material"),
     Style = 2,
     IndicatorStyle = 1,
     Callback = function()
@@ -3438,20 +3413,17 @@ featureGroup:CreateButton({
 
 local dataGroup = SettingsTab:CreateGroupbox({
     Name = "Data Management",
-    Icon = StarlightIcon("database", "Material"),
     Column = 2,
 }, "DataManagementGroup")
 
 dataGroup:CreateParagraph({
     Name = "Reset BLACKSIGIL Data",
     Content = "This permanently clears BLACKSIGIL's saved mock units, traits, histories, pity counters, equipped slots, and saved resource state. Use this when you want a completely fresh BLACKSIGIL profile.",
-    Icon = StarlightIcon("delete_forever", "Material"),
 }, "DeleteDataInfo")
 
 dataGroup:CreateButton({
     Name = "Delete All Mock Data",
     Tooltip = "Clear all BLACKSIGIL mock data and reset its saved state.",
-    Icon = StarlightIcon("delete_forever", "Material"),
     Style = 2,
     Callback = function()
         DeleteAllMockData()
@@ -3460,14 +3432,12 @@ dataGroup:CreateButton({
 
 local aboutGroup = SettingsTab:CreateGroupbox({
     Name = "BLACKSIGIL",
-    Icon = StarlightIcon("shield", "Material"),
     Column = 2,
 }, "AboutGroup")
 
 aboutGroup:CreateParagraph({
     Name = "Anime Vanguards Edition",
     Content = "Trait rerolls, banner summons, mock inventory, equip/hotbar integration, workspace followers, pity systems, and persistent rejoin restoration in one interface.",
-    Icon = StarlightIcon("auto_awesome", "Material"),
 }, "AboutInfo")
 
 -- Starlight's built-in appearance controls. This uses the library's theme
