@@ -943,6 +943,10 @@ end
 
 local SyncMockTraitToHotbar
 local RefreshEquippedMockPresentation
+-- Forward declaration: ApplyTraitToNativeLocalState is defined before the
+-- actual helper body later in the file. Without this, Lua resolves the early
+-- reference as a global and calls nil during every reroll.
+local IsTraitRerollBlockingHotbar
 
 local function ApplyTraitToNativeLocalState(unitID, rolledTrait)
     if type(unitID) ~= "string" or unitID == "" then
@@ -2187,7 +2191,7 @@ local function SettleUnitInventoryMockEquipVisual(equipped)
     end)
 end
 
-local function IsTraitRerollBlockingHotbar()
+IsTraitRerollBlockingHotbar = function()
     local gui = PlayerGui:FindFirstChild("TraitReroll")
     if not gui then return false end
 
