@@ -286,6 +286,36 @@ local UIPaths = {
 
 -- ================================
 -- PERSISTENT MOCK STORAGE
+local function GetUnitInventoryCountLabel()
+    return SafeGet(
+        PlayerGui,
+        "UnitInventory", "Frame", "Frame", "Frame", "Frame",
+        4, "Folder", "Overlay", "Frame", "PrimaryButton", "Frame", "TextLabel"
+    )
+end
+
+local function SyncUnitInventoryCount()
+    local label = GetUnitInventoryCountLabel()
+    if not label or not label:IsA("TextLabel") then
+        return
+    end
+
+    local units = GetNativeUnitDataSnapshot and GetNativeUnitDataSnapshot() or nil
+    if type(units) ~= "table" then
+        local ok, root = pcall(Fusion.peek, PlayerDataState)
+        units = ok and type(root) == "table" and root.UnitData or nil
+    end
+
+    local count = 0
+    if type(units) == "table" then
+        for _ in pairs(units) do
+            count += 1
+        end
+    end
+
+    label.Text = string.format("%d/100", math.clamp(count, 0, 100))
+end
+
 -- ================================
 local PERSISTENCE_FILE = "EXECØ_mock_state_v15.json"
 local PersistedSnapshot = nil
@@ -655,6 +685,7 @@ local function SyncAllDisplays()
         SyncPityDisplays()
         SyncTraitPityDisplays()
     end)
+    SyncUnitInventoryCount()
 end
 
 local function CloneMap(source)
@@ -3420,40 +3451,9 @@ pcall(function()
     })
 end)
 
--- TraitReroll is created lazily. Keep a lightweight waiter alive so exact
--- reroll count + index pity text/bars are applied as soon as its descendants exist.
-local lastTraitRerollHotbarBlocked = false
-task.spawn(function()
-    while true do
-        local blocked = IsTraitRerollBlockingHotbar()
-        if blocked ~= lastTraitRerollHotbarBlocked then
-            lastTraitRerollHotbarBlocked = blocked
-
-            for unitID, view in pairs(MockSlotViews) do
-                if view and typeof(view.Host) == "Instance" and view.Host.Parent then
-                    view.Host.Visible = not blocked
-                end
-
-                if not blocked and MockEquippedSlots[unitID] and (not view or not view.Host or not view.Host.Parent) then
-                    task.defer(function()
-                        local slot = MockEquippedSlots[unitID]
-                        if slot then
-                            local ok, mounted, err = pcall(MountMockNativeSlot, unitID, slot)
-                            if not ok then
-                                warn("[EXECØ] TraitReroll hotbar restore failed:", mounted)
-                            elseif mounted ~= true then
-                                QueueDeferredNativeHotbarMount(unitID, slot)
-                            end
-                        end
-                    end)
-                end
-            end
-        end
-
-        task.wait(0.1)
-    end
-end)
-
+-- TraitReroll is created lazily. Do not change mock hotbar mount/equip state
+-- when this menu opens; the native HUD can hide visually without us destroying
+-- or remounting the mock slot.
 task.spawn(function()
     while true do
         local rerollGui = PlayerGui:FindFirstChild("TraitReroll")
@@ -3477,7 +3477,7 @@ local function QueueVisualHudRefresh()
 end
 
 PlayerGui.ChildAdded:Connect(function(child)
-    if child.Name == "Summon" or child.Name == "TraitReroll" then
+    if child.Name == "Summon" or child.Name == "TraitReroll" or child.Name == "UnitInventory" then
         QueueVisualHudRefresh()
     elseif child.Name == "BottomHUD" and not __BLACKSIGIL_TELEPORT_BOOT then
         QueueVisualHudRefresh()
@@ -3490,7 +3490,7 @@ PlayerGui.DescendantAdded:Connect(function(descendant)
         root = root.Parent
     end
 
-    if root and (root.Name == "Summon" or root.Name == "TraitReroll") then
+    if root and (root.Name == "Summon" or root.Name == "TraitReroll" or root.Name == "UnitInventory") then
         QueueVisualHudRefresh()
     elseif root and root.Name == "BottomHUD" and not __BLACKSIGIL_TELEPORT_BOOT then
         QueueVisualHudRefresh()
