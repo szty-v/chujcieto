@@ -205,7 +205,8 @@ end
 -- SAFE LOGGING
 -- ================================
 local function SafeLog(title, message)
-    print(string.format("[EXECO] %s - %s", tostring(title), tostring(message)))
+    -- Routine EXECO logging is intentionally silent. Keep warn() calls for
+    -- genuine failures/errors only so the developer console is not spammed.
 end
 
 -- ================================
@@ -867,6 +868,25 @@ local function ReadLocalItemRecord(assetName)
     return nil
 end
 
+local function GetLocalItemAmount(assetName)
+    local record = ReadLocalItemRecord(assetName)
+    if type(record) ~= "table" then
+        return nil
+    end
+
+    local amount = record.Amount
+    if amount == nil then amount = record.Value end
+    if amount == nil then amount = record.Count end
+    if amount == nil then amount = record.Quantity end
+
+    amount = tonumber(amount)
+    if amount == nil then
+        return nil
+    end
+
+    return math.max(0, math.floor(amount))
+end
+
 local function CapturePrivateCurrencyBaseline()
     local rerollName = GetTraitRerollItemName()
     PrivateCurrencyBaseline = {
@@ -1516,33 +1536,43 @@ local function PerformVisualReroll(unitID, confirmed, options)
     RerollInProgress = true
 
     local ok, result = pcall(function()
-        if options.Consume ~= false and VisualState.TraitRerolls <= 0 then
-            SafeLog("Trait Reroll", "No visual trait rerolls remaining")
+        local rerollItemName = GetTraitRerollItemName()
+        local currentRerollAmount
+
+        if PrivateControlsEnabled then
+            currentRerollAmount = math.max(0, math.floor(tonumber(VisualState.TraitRerolls) or 0))
+        else
+            -- Persistence OFF: use the player's current local/native reroll amount.
+            -- Rollback remains local/visual, but it still consumes one reroll.
+            currentRerollAmount = GetLocalItemAmount(rerollItemName)
+        end
+
+        if options.Consume ~= false and (currentRerollAmount == nil or currentRerollAmount <= 0) then
             return false
         end
 
         local rolledTrait = RollRandomTrait()
         if not rolledTrait then
-            SafeLog("Trait Reroll", "Trait database unavailable")
             return false
         end
 
         local appliedNative, nativeErr = ApplyTraitToNativeLocalState(unitID, rolledTrait)
-        local previousRerollAmount = VisualState.TraitRerolls
+        local previousRerollAmount = currentRerollAmount
 
         if options.Consume ~= false then
-            VisualState.TraitRerolls = math.max(0, VisualState.TraitRerolls - 1)
+            local remaining = math.max(0, currentRerollAmount - 1)
 
-            -- Keep the real client-side reroll Value and exact TraitReroll label
-            -- synchronized on every mock roll (e.g. 100 -> 99).
             if PrivateControlsEnabled then
-                local rerollOk, rerollErr = SetLocalItemAmount(
-                    GetTraitRerollItemName(),
-                    VisualState.TraitRerolls
-                )
-                if not rerollOk then
-                    warn("[EXECO] Reroll consume sync warning:", rerollErr)
-                end
+                VisualState.TraitRerolls = remaining
+                PrivatePendingValues.TraitRerolls = remaining
+            end
+
+            -- Always consume from the active local reroll Value. With Persistence
+            -- enabled this is the spoofed pool; with it disabled this is the
+            -- player's normal local amount.
+            local rerollOk, rerollErr = SetLocalItemAmount(rerollItemName, remaining)
+            if not rerollOk then
+                warn("[EXECO] Reroll consume sync warning:", rerollErr)
             end
         end
         VisualState.LastTrait = rolledTrait
@@ -3567,7 +3597,7 @@ end
 do
     local featureForm = FeaturesTab:PageSection({
         Title = "Rollback",
-        Subtitle = "Enable or disable rollback interception.",
+        Subtitle = "Enable or disable rollback.",
     }):Form()
 
     AddCascadeToggle(
@@ -3603,7 +3633,7 @@ do
     AddCascadeToggle(
         controlForm,
         "Enable Persistance Exploit",
-        "Allow the private sliders below to modify local values.",
+        "Allow the sliders below to modify currency.",
         PrivateControlsEnabled,
         function(value)
             if value == PrivateControlsEnabled then return end
