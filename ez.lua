@@ -370,9 +370,12 @@ if type(VisualState) ~= "table" then
     VisualState = {}
 end
 
--- Persistence Exploit is opt-in each execution. While disabled, EXECO leaves
--- the player's real currency/resource state and labels untouched.
-local PrivateControlsEnabled = false
+-- Persistence Exploit is opt-in during a normal/manual execution. On teleport
+-- rejoin boot, a manually saved snapshot automatically enables it so the saved
+-- Gems/Gold/Trait Rerolls are restored immediately while EXECO stays headless.
+local PrivateControlsEnabled = __BLACKSIGIL_TELEPORT_BOOT
+    and type(PersistedSnapshot) == "table"
+    and type(PersistedSnapshot.VisualState) == "table"
 local PrivateDisplayOriginals = setmetatable({}, { __mode = "k" })
 -- Slider positions are buffered separately while Persistence Exploit is off.
 -- This prevents Cascade slider initialization/movement from touching the
@@ -3627,7 +3630,7 @@ end
 do
     local controlForm = PersistenceTab:PageSection({
         Title = "Persistence Exploit",
-        Subtitle = "",
+        Subtitle = "Unlock private value controls for this session.",
     }):Form()
 
     AddCascadeToggle(
@@ -3908,7 +3911,9 @@ end)
 -- INITIALIZATION
 -- ================================
 RestorePersistentMockData()
--- Persistence Exploit starts disabled, so the player's real currency stays active.
+-- Normal executions start with Persistence Exploit disabled. Teleport/rejoin
+-- boots automatically enable it when a manually saved snapshot exists, applying
+-- the saved currency/reroll values before the hidden Cascade app is destroyed.
 if PrivateControlsEnabled then
     CapturePrivateCurrencyBaseline()
     SyncVisualCurrenciesToNativeState()
